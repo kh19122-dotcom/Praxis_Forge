@@ -6,7 +6,8 @@ services:
       context: ./fake-booking
       target: runtime
     ports:
-      - "8080:8080"
+      # Unauthenticated admin/fault/reset controls stay on loopback by default.
+      - "127.0.0.1:8080:8080"
     environment:
       FORGE_SEED: obj-001
     healthcheck:
@@ -28,3 +29,5 @@ services:
       target: test
     environment:
       FORGE_SEED: obj-001
+    volumes:
+      - ./docker-compose.yml:/docker-compose.yml:ro

@@ -31,7 +31,7 @@ From the repository root:
 docker compose up --build fake-booking
 ```
 
-The API listens on `http://127.0.0.1:8080`. Check liveness with:
+The default Compose publish is loopback-only (`127.0.0.1:8080:8080`). The API is available at `http://127.0.0.1:8080` and is not published on other host interfaces. Check liveness with:
 
 ```bash
 curl -s http://127.0.0.1:8080/healthz
