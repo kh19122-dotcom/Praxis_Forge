@@ -1,0 +1,140 @@
+openapi: 3.1.0
+info:
+  title: Praxis Forge Fake Booking
+  version: 0.1.0
+  description: |
+    Deterministic synthetic booking-provider simulator.
+
+    Identifiers and available slots are derived from `FORGE_SEED` (default `obj-001`)
+    and a fixed synthetic calendar origin of `2030-01-06T00:00:00Z`. All patient
+    references must use the `synth-` prefix. This service is not a production
+    booking system and makes no regulatory claims.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /healthz:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: Service is running
+  /v1/slots:
+    get:
+      summary: List slots
+      parameters:
+        - in: query
+          name: resource_id
+          schema:
+            type: string
+        - in: query
+          name: available
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: Deterministic slot catalog for the configured seed
+  /v1/bookings:
+    post:
+      summary: Create a booking
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingCreate"
+      responses:
+        "201":
+          description: Booking committed
+        "200":
+          description: Idempotent replay of an existing booking
+        "409":
+          description: Slot or idempotency conflict
+        "503":
+          description: fail_before_commit — remote commit was not attempted
+        "504":
+          description: ambiguous_outcome — inspect /v1/admin/events
+  /v1/bookings/{booking_id}:
+    get:
+      summary: Read a booking
+      parameters:
+        - in: path
+          name: booking_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Booking
+        "404":
+          description: Unknown booking
+  /v1/admin/events:
+    get:
+      summary: Observable transaction/event trace
+      parameters:
+        - in: query
+          name: trace_id
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ordered events
+  /v1/admin/faults:
+    get:
+      summary: Read current fault injection
+      responses:
+        "200":
+          description: Fault state
+    put:
+      summary: Configure deterministic failure injection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FaultConfig"
+      responses:
+        "200":
+          description: Fault state
+  /v1/admin/reset:
+    post:
+      summary: Reset catalog, bookings, events, and faults
+      responses:
+        "200":
+          description: Reset complete
+components:
+  schemas:
+    BookingCreate:
+      type: object
+      required: [slot_id, patient_ref]
+      properties:
+        slot_id:
+          type: string
+        patient_ref:
+          type: string
+          pattern: "^synth-[a-z0-9-]+$"
+    FaultConfig:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [none, fail_before_commit, delay, ambiguous]
+        delay_ms:
+          type: integer
+          minimum: 0
+          maximum: 5000
+        remaining:
+          type: integer
+          minimum: 0
+          maximum: 100
+        idempotency_key:
+          type: string
+          nullable: true

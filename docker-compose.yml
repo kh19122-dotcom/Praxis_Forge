@@ -1,0 +1,33 @@
+name: praxis-forge
+
+services:
+  fake-booking:
+    build:
+      context: ./fake-booking
+      target: runtime
+    ports:
+      # Unauthenticated admin/fault/reset controls stay on loopback by default.
+      - "127.0.0.1:8080:8080"
+    environment:
+      FORGE_SEED: obj-001
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  fake-booking-tests:
+    profiles: ["test"]
+    build:
+      context: ./fake-booking
+      target: test
+    environment:
+      FORGE_SEED: obj-001
+    volumes:
+      - ./docker-compose.yml:/docker-compose.yml:ro
