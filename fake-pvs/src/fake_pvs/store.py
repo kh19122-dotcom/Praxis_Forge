@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from hashlib import sha256
 from threading import Lock
+from typing import Any
 
 from fake_pvs.corpus import generate_encounters, generate_patients
 from fake_pvs.ids import task_id
 from fake_pvs.models import FaultConfig, FaultState
+from fake_pvs.persist import read_state, write_state
 from fake_pvs.settings import Settings
+
+STATE_SCHEMA = "praxis-forge.fake-pvs-state.v1"
 
 
 class Store:
@@ -21,22 +25,29 @@ class Store:
         self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
         self._seq = 0
         self._trace = 0
-        self.reset()
+        self.reset(restore=True)
 
-    def reset(self) -> None:
+    def reset(self, restore: bool = False) -> None:
         with self._lock:
-            self.patients = generate_patients(self.settings)
-            self.encounters = generate_encounters(self.settings)
-            self.tasks = {}
-            self.tasks_by_key = {}
-            self.events = []
-            self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
-            self._seq = 0
-            self._trace = 0
+            self._reset_locked(restore=restore)
+
+    def _reset_locked(self, *, restore: bool) -> None:
+        self.patients = generate_patients(self.settings)
+        self.encounters = generate_encounters(self.settings)
+        self.tasks = {}
+        self.tasks_by_key = {}
+        self.events = []
+        self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
+        self._seq = 0
+        self._trace = 0
+        if restore and self._restore_locked():
+            return
+        self._persist_locked()
 
     def next_trace_id(self) -> str:
         with self._lock:
             self._trace += 1
+            self._persist_locked()
             return f"tr_{self._trace:06d}"
 
     def record(self, trace_id: str, event_type: str, **details: object) -> dict:
@@ -49,6 +60,7 @@ class Store:
                 "details": details,
             }
             self.events.append(event)
+            self._persist_locked()
             return event
 
     def set_fault(self, config: FaultConfig) -> FaultState:
@@ -157,4 +169,57 @@ class Store:
             }
             self.tasks[new_id] = task
             self.tasks_by_key[idempotency_key] = new_id
+            self._persist_locked()
             return {"kind": "created", "task": dict(task)}
+
+    def _persist_locked(self) -> None:
+        path = self.settings.state_path
+        if not path:
+            return
+        write_state(path, self._snapshot_locked())
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        return {
+            "schema": STATE_SCHEMA,
+            "seed": self.settings.seed,
+            "seq": self._seq,
+            "trace": self._trace,
+            "tasks": self.tasks,
+            "tasks_by_key": self.tasks_by_key,
+            "events": self.events,
+        }
+
+    def _restore_locked(self) -> bool:
+        path = self.settings.state_path
+        if not path:
+            return False
+        payload = read_state(path)
+        if payload is None:
+            return False
+        if payload.get("schema") != STATE_SCHEMA:
+            return False
+        if payload.get("seed") != self.settings.seed:
+            return False
+        tasks = payload.get("tasks")
+        tasks_by_key = payload.get("tasks_by_key")
+        events = payload.get("events")
+        seq = payload.get("seq")
+        trace = payload.get("trace")
+        if not isinstance(tasks, dict) or not isinstance(tasks_by_key, dict):
+            return False
+        if not isinstance(events, list):
+            return False
+        if not isinstance(seq, int) or not isinstance(trace, int):
+            return False
+        self.tasks = {
+            str(key): dict(value)
+            for key, value in tasks.items()
+            if isinstance(value, dict)
+        }
+        self.tasks_by_key = {
+            str(key): str(value) for key, value in tasks_by_key.items() if isinstance(value, str)
+        }
+        self.events = [dict(event) for event in events if isinstance(event, dict)]
+        self._seq = seq
+        self._trace = trace
+        return True

@@ -9,7 +9,7 @@ from fake_booking.settings import Settings
 
 @pytest.fixture
 def client() -> TestClient:
-    store.settings = Settings(seed="obj-001")
+    store.settings = Settings(seed="obj-001", state_path=None)
     store.reset()
     with TestClient(app) as test_client:
         yield test_client

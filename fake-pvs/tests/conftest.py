@@ -9,7 +9,7 @@ from fake_pvs.settings import Settings
 
 @pytest.fixture
 def client() -> TestClient:
-    store.settings = Settings(seed="obj-002")
+    store.settings = Settings(seed="obj-002", state_path=None)
     store.reset()
     with TestClient(app) as test_client:
         yield test_client

@@ -10,6 +10,9 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       FORGE_SEED: obj-001
+      FORGE_STATE_PATH: /var/lib/forge/state.json
+    volumes:
+      - fake-booking-state:/var/lib/forge
     healthcheck:
       test:
         [
@@ -41,6 +44,9 @@ services:
       - "127.0.0.1:8081:8081"
     environment:
       FORGE_SEED: obj-002
+      FORGE_STATE_PATH: /var/lib/forge/state.json
+    volumes:
+      - fake-pvs-state:/var/lib/forge
     healthcheck:
       test:
         [
@@ -219,3 +225,7 @@ services:
       target: test
     volumes:
       - ./docker-compose.yml:/docker-compose.yml:ro
+
+volumes:
+  fake-booking-state:
+  fake-pvs-state:
