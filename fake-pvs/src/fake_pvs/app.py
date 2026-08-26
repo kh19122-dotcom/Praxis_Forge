@@ -43,23 +43,24 @@ app = FastAPI(
 )
 
 
-class DataPlaneAdmissionMiddleware:
-    """Enroll POST /v1/tasks before downstream body consumption."""
+class RequestAdmissionMiddleware:
+    """Enroll mutating requests before downstream body consumption."""
 
-    def __init__(self, app, *, store: Store, path: str) -> None:
+    def __init__(self, app, *, store: Store, routes: frozenset[tuple[str, str]]) -> None:
         self.app = app
         self.store = store
-        self.path = path
+        self.routes = routes
 
     async def __call__(self, scope, receive, send):
-        if (
-            scope["type"] != "http"
-            or scope.get("method") != "POST"
-            or scope.get("path") != self.path
-        ):
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        epoch = self.store.admit()
+        method = scope.get("method")
+        path = scope.get("path")
+        if (method, path) not in self.routes:
+            await self.app(scope, receive, send)
+            return
+        epoch = await asyncio.to_thread(self.store.admit)
         state = scope.setdefault("state", {})
         if isinstance(state, dict):
             state["admission_epoch"] = epoch
@@ -71,7 +72,16 @@ class DataPlaneAdmissionMiddleware:
             self.store.release(epoch)
 
 
-app.add_middleware(DataPlaneAdmissionMiddleware, store=store, path="/v1/tasks")
+app.add_middleware(
+    RequestAdmissionMiddleware,
+    store=store,
+    routes=frozenset(
+        {
+            ("POST", "/v1/tasks"),
+            ("PUT", "/v1/admin/faults"),
+        }
+    ),
+)
 
 
 @app.exception_handler(HTTPException)
@@ -341,8 +351,8 @@ def get_fault() -> FaultState:
 
 
 @app.put("/v1/admin/faults", response_model=FaultState, tags=["admin"])
-def put_fault(config: FaultConfig) -> FaultState:
-    epoch = store.epoch()
+def put_fault(request: Request, config: FaultConfig) -> FaultState:
+    epoch = request.state.admission_epoch
     try:
         fault = store.set_fault(config, epoch=epoch)
         store.record(

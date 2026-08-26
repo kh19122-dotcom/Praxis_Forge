@@ -31,16 +31,17 @@ def _stop_uvicorn(server: uvicorn.Server, thread: threading.Thread) -> None:
     thread.join(timeout=5)
 
 
-def _send_partial_post(
+def _send_partial_request(
     host: str,
     port: int,
+    method: str,
     path: str,
     headers: dict[str, str],
     body: bytes,
     first_bytes: int,
 ) -> socket.socket:
     header_lines = [
-        f"POST {path} HTTP/1.1",
+        f"{method} {path} HTTP/1.1",
         f"Host: {host}:{port}",
         "Content-Type: application/json",
         f"Content-Length: {len(body)}",
@@ -51,6 +52,17 @@ def _send_partial_post(
     sock = socket.create_connection((host, port), timeout=5)
     sock.sendall(payload)
     return sock
+
+
+def _send_partial_post(
+    host: str,
+    port: int,
+    path: str,
+    headers: dict[str, str],
+    body: bytes,
+    first_bytes: int,
+) -> socket.socket:
+    return _send_partial_request(host, port, "POST", path, headers, body, first_bytes)
 
 
 def _finish_body(sock: socket.socket, body: bytes, first_bytes: int) -> None:
@@ -160,6 +172,160 @@ def test_partial_body_request_cannot_commit_into_new_epoch() -> None:
             assert "booking_requested" in types
             assert "booking_committed" in types
         assert store.in_flight_total() == 0
+    finally:
+        _stop_uvicorn(server, thread)
+        store.reset()
+
+
+def test_new_post_during_reset_does_not_block_event_loop() -> None:
+    store.settings = Settings(seed="obj-001", state_path=None)
+    store.reset()
+    server, thread, host, port = _start_uvicorn(app)
+    try:
+        base = f"http://{host}:{port}"
+        with httpx.Client(timeout=2.0) as client:
+            slot = client.get(f"{base}/v1/slots").json()["slots"][0]
+        old_body = json.dumps(
+            {"slot_id": slot["id"], "patient_ref": "synth-ada"},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        first_bytes = max(1, len(old_body) // 3)
+        old_sock = _send_partial_post(
+            host,
+            port,
+            "/v1/bookings",
+            {"Idempotency-Key": "raw-old-booking"},
+            old_body,
+            first_bytes,
+        )
+        try:
+            _wait_until(lambda: store.in_flight_total() >= 1)
+            late: dict[str, object] = {}
+            reset_done = threading.Event()
+
+            def _reset() -> None:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.post(f"{base}/v1/admin/reset")
+                    late["reset_status"] = response.status_code
+                reset_done.set()
+
+            reset_worker = threading.Thread(target=_reset)
+            reset_worker.start()
+            _wait_until(store.is_resetting)
+            assert not reset_done.is_set()
+
+            new_done = threading.Event()
+
+            def _new_post() -> None:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.post(
+                        f"{base}/v1/bookings",
+                        headers={"Idempotency-Key": "raw-new-booking"},
+                        json={"slot_id": slot["id"], "patient_ref": "synth-ada"},
+                    )
+                    late["new_status"] = response.status_code
+                    late["new_body"] = response.json()
+                new_done.set()
+
+            new_worker = threading.Thread(target=_new_post)
+            new_worker.start()
+            time.sleep(0.1)
+            assert not new_done.is_set()
+            assert store.is_resetting()
+            assert not reset_done.is_set()
+            _finish_body(old_sock, old_body, first_bytes)
+            old_status, old_body_json = _read_http_response(old_sock)
+            reset_worker.join(timeout=5)
+            new_worker.join(timeout=5)
+            assert not reset_worker.is_alive()
+            assert not new_worker.is_alive()
+            assert reset_done.is_set()
+            assert new_done.is_set()
+            assert late["reset_status"] == 200
+            assert old_status == 409
+            assert old_body_json["error"] == "epoch_stale"
+            assert late["new_status"] == 201
+            assert late["new_body"]["slot_id"] == slot["id"]
+        finally:
+            old_sock.close()
+        with httpx.Client(timeout=2.0) as client:
+            types = [
+                event["type"]
+                for event in client.get(f"{base}/v1/admin/events").json()["events"]
+            ]
+            assert "booking_requested" in types
+            assert "booking_committed" in types
+            traces = {
+                event["trace_id"]
+                for event in client.get(f"{base}/v1/admin/events").json()["events"]
+            }
+            assert traces == {f"tr_{store.epoch():06d}_000001"}
+    finally:
+        _stop_uvicorn(server, thread)
+        store.reset()
+
+
+def test_partial_fault_put_cannot_configure_new_epoch() -> None:
+    store.settings = Settings(seed="obj-001", state_path=None)
+    store.reset()
+    server, thread, host, port = _start_uvicorn(app)
+    try:
+        base = f"http://{host}:{port}"
+        body = json.dumps(
+            {"mode": "fail_before_commit", "remaining": 1},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        first_bytes = max(1, len(body) // 3)
+        sock = _send_partial_request(
+            host,
+            port,
+            "PUT",
+            "/v1/admin/faults",
+            {},
+            body,
+            first_bytes,
+        )
+        try:
+            _wait_until(lambda: store.in_flight_total() >= 1)
+            late: dict[str, object] = {}
+            reset_done = threading.Event()
+
+            def _reset() -> None:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.post(f"{base}/v1/admin/reset")
+                    late["reset_status"] = response.status_code
+                reset_done.set()
+
+            reset_worker = threading.Thread(target=_reset)
+            reset_worker.start()
+            _wait_until(store.is_resetting)
+            assert not reset_done.is_set()
+            _finish_body(sock, body, first_bytes)
+            old_status, old_body = _read_http_response(sock)
+            reset_worker.join(timeout=5)
+            assert not reset_worker.is_alive()
+            assert late["reset_status"] == 200
+            assert old_status == 409
+            assert old_body["error"] == "epoch_stale"
+        finally:
+            sock.close()
+        with httpx.Client(timeout=2.0) as client:
+            current = client.get(f"{base}/v1/admin/faults").json()
+            assert current["mode"] == "none"
+            assert current["remaining"] == 0
+            events = client.get(f"{base}/v1/admin/events").json()["events"]
+            assert events == []
+            armed = client.put(
+                f"{base}/v1/admin/faults",
+                json={"mode": "fail_before_commit", "remaining": 1},
+            )
+            assert armed.status_code == 200
+            assert armed.json()["mode"] == "fail_before_commit"
+            types = [
+                event["type"]
+                for event in client.get(f"{base}/v1/admin/events").json()["events"]
+            ]
+            assert "fault_configured" in types
     finally:
         _stop_uvicorn(server, thread)
         store.reset()

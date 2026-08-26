@@ -14,6 +14,10 @@ MODES = frozenset(
 )
 
 
+class EpochStale(Exception):
+    """Raised when a request tries to mutate a newer reset epoch."""
+
+
 @dataclass(frozen=True)
 class Fault:
     mode: str = "none"
@@ -41,6 +45,10 @@ class FaultController:
     def in_flight_total(self) -> int:
         with self._lock:
             return sum(self._in_flight.values())
+
+    def is_resetting(self) -> bool:
+        with self._lock:
+            return self._resetting
 
     def begin(self) -> int:
         with self._cond:
@@ -84,7 +92,7 @@ class FaultController:
             self._cond.notify_all()
             return self._fault
 
-    def configure(self, payload: dict[str, Any]) -> Fault:
+    def configure(self, payload: dict[str, Any], *, epoch: int | None = None) -> Fault:
         mode = payload.get("mode", "none")
         if mode not in MODES:
             raise ValueError(f"unsupported mode: {mode!r}")
@@ -112,6 +120,8 @@ class FaultController:
             idempotency_key=idempotency_key,
         )
         with self._lock:
+            if epoch is not None and epoch != self._epoch:
+                raise EpochStale()
             self._fault = fault
             self._record_locked(
                 "fault_configured",

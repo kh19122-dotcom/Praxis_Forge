@@ -69,6 +69,10 @@ class Store:
         with self._lock:
             return sum(self._in_flight.values())
 
+    def is_resetting(self) -> bool:
+        with self._lock:
+            return self._resetting
+
     def admit(self) -> int:
         with self._cond:
             while self._resetting:
