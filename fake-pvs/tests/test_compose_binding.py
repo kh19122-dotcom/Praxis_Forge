@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+HOST_PORT_PUBLISH = re.compile(r"(?:\d+\.\d+\.\d+\.\d+:)?\d+:8081\Z")
 
 
 def _compose_file() -> Path:
@@ -18,6 +21,6 @@ def test_default_compose_port_is_loopback_only() -> None:
     text = _compose_file().read_text(encoding="utf-8")
     assert "127.0.0.1:8081:8081" in text
     for raw in text.splitlines():
-        stripped = raw.split("#", 1)[0].strip().strip("-").strip().strip("\"'")
-        if stripped.endswith(":8081"):
+        stripped = raw.split("#", 1)[0].strip().lstrip("-").strip().strip("\"'")
+        if HOST_PORT_PUBLISH.fullmatch(stripped):
             assert stripped == "127.0.0.1:8081:8081"
