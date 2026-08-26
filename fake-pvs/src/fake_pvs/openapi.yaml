@@ -1,0 +1,202 @@
+openapi: 3.1.0
+info:
+  title: Praxis Forge Fake PVS
+  version: 0.1.0
+  description: |
+    Deterministic synthetic PVS-like simulator.
+
+    Identifiers and seeded corpus records are derived from `FORGE_SEED` (default
+    `obj-002`) and a fixed synthetic calendar origin of `2030-01-06T00:00:00Z`.
+    Patient identifiers, task titles, and search keys must use the `synth-`
+    prefix. This service is not a production PVS and makes no vendor-compatibility
+    or regulatory claims.
+servers:
+  - url: http://127.0.0.1:8081
+paths:
+  /healthz:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: Service is running
+  /v1/patients:
+    get:
+      summary: List or search synthetic patients
+      parameters:
+        - in: query
+          name: cohort
+          schema:
+            type: string
+        - in: query
+          name: site
+          schema:
+            type: string
+        - in: query
+          name: id
+          schema:
+            type: string
+            pattern: "^synth-[a-z0-9-]+$"
+      responses:
+        "200":
+          description: Deterministic patient corpus for the configured seed
+        "422":
+          description: validation_error — search key is not a synthetic identifier
+  /v1/patients/{patient_id}:
+    get:
+      summary: Read one synthetic patient
+      parameters:
+        - in: path
+          name: patient_id
+          required: true
+          schema:
+            type: string
+            pattern: "^synth-[a-z0-9-]+$"
+      responses:
+        "200":
+          description: Patient
+        "404":
+          description: Unknown patient
+        "422":
+          description: validation_error — identifier is not synthetic
+  /v1/patients/{patient_id}/encounters:
+    get:
+      summary: List seeded encounters for a synthetic patient
+      parameters:
+        - in: path
+          name: patient_id
+          required: true
+          schema:
+            type: string
+            pattern: "^synth-[a-z0-9-]+$"
+      responses:
+        "200":
+          description: Seeded encounters
+        "404":
+          description: Unknown patient
+  /v1/encounters/{encounter_id}:
+    get:
+      summary: Read one seeded encounter
+      parameters:
+        - in: path
+          name: encounter_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Encounter
+        "404":
+          description: Unknown encounter
+  /v1/tasks:
+    post:
+      summary: Create a synthetic staff task
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCreate"
+      responses:
+        "201":
+          description: Task committed
+        "200":
+          description: Idempotent replay of an existing task
+        "404":
+          description: Unknown patient
+        "409":
+          description: Idempotency conflict
+        "422":
+          description: validation_error
+        "503":
+          description: fail_before_commit — remote commit was not attempted
+        "504":
+          description: ambiguous_outcome — inspect /v1/admin/events
+  /v1/tasks/{task_id}:
+    get:
+      summary: Read a staff task
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task
+        "404":
+          description: Unknown task
+  /v1/admin/events:
+    get:
+      summary: Observable transaction/event trace
+      parameters:
+        - in: query
+          name: trace_id
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ordered events
+  /v1/admin/faults:
+    get:
+      summary: Read current fault injection
+      responses:
+        "200":
+          description: Fault state
+    put:
+      summary: Configure deterministic failure injection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FaultConfig"
+      responses:
+        "200":
+          description: Fault state
+  /v1/admin/reset:
+    post:
+      summary: Reset corpus, tasks, events, and faults
+      responses:
+        "200":
+          description: Reset complete
+components:
+  schemas:
+    TaskCreate:
+      type: object
+      required: [patient_id, title]
+      properties:
+        patient_id:
+          type: string
+          pattern: "^synth-[a-z0-9-]+$"
+        title:
+          type: string
+          pattern: "^synth-[a-z0-9-]+$"
+        priority:
+          type: string
+          enum: [low, normal, high]
+          default: normal
+    FaultConfig:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [none, fail_before_commit, delay, ambiguous]
+        delay_ms:
+          type: integer
+          minimum: 0
+          maximum: 5000
+        remaining:
+          type: integer
+          minimum: 0
+          maximum: 100
+        idempotency_key:
+          type: string
+          nullable: true
