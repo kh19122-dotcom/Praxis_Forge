@@ -43,6 +43,7 @@ def test_compose_keeps_admin_ports_loopback_and_runner_on_internal_http() -> Non
     assert "scenario-runner:" in text
     assert "scenario-runner-transport:" in text
     assert "scenario-runner-soak:" in text
+    assert "contract-check:" in text
     assert "--soak" in text
     assert "--iterations" in text
     assert "FORGE_EVIDENCE_FILE: /evidence/soak.json" in text
