@@ -339,3 +339,219 @@ def test_partial_fault_put_cannot_configure_new_epoch() -> None:
     finally:
         _stop_uvicorn(server, thread)
         store.reset()
+
+
+def test_overlapping_resets_serialize_and_preserve_new_create() -> None:
+    store.settings = Settings(seed="obj-002", state_path=None)
+    store.reset()
+    server, thread, host, port = _start_uvicorn(app)
+    try:
+        base = f"http://{host}:{port}"
+        old_body = json.dumps(
+            {
+                "patient_id": "synth-ada",
+                "title": "synth-task",
+                "priority": "normal",
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        first_bytes = max(1, len(old_body) // 3)
+        old_sock = _send_partial_post(
+            host,
+            port,
+            "/v1/tasks",
+            {"Idempotency-Key": "raw-old-overlap-pvs"},
+            old_body,
+            first_bytes,
+        )
+        try:
+            _wait_until(lambda: store.in_flight_total() >= 1)
+            late: dict[str, object] = {}
+            reset1_done = threading.Event()
+            reset2_done = threading.Event()
+            owner_order: list[int] = []
+
+            def _reset(name: str, done: threading.Event) -> None:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.post(f"{base}/v1/admin/reset")
+                    late[f"{name}_status"] = response.status_code
+                    late[f"{name}_body"] = response.json()
+                done.set()
+
+            reset1 = threading.Thread(target=_reset, args=("reset1", reset1_done))
+            reset1.start()
+            _wait_until(store.is_resetting)
+            owner_order.append(store.reset_generation())
+            assert not reset1_done.is_set()
+
+            reset2 = threading.Thread(target=_reset, args=("reset2", reset2_done))
+            reset2.start()
+            _wait_until(lambda: store.pending_reset_count() >= 2)
+            assert store.reset_generation() == owner_order[0]
+            time.sleep(0.1)
+            assert not reset1_done.is_set()
+            assert not reset2_done.is_set()
+            assert store.is_resetting()
+
+            new_done = threading.Event()
+
+            def _new_post() -> None:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.post(
+                        f"{base}/v1/tasks",
+                        headers={"Idempotency-Key": "raw-new-overlap-pvs"},
+                        json={
+                            "patient_id": "synth-ada",
+                            "title": "synth-task",
+                            "priority": "normal",
+                        },
+                    )
+                    late["new_status"] = response.status_code
+                    late["new_body"] = response.json()
+                new_done.set()
+
+            new_worker = threading.Thread(target=_new_post)
+            new_worker.start()
+            time.sleep(0.1)
+            assert not new_done.is_set()
+            assert not reset1_done.is_set()
+            assert not reset2_done.is_set()
+
+            _finish_body(old_sock, old_body, first_bytes)
+            old_status, old_body_json = _read_http_response(old_sock)
+            reset1.join(timeout=5)
+            reset2.join(timeout=5)
+            new_worker.join(timeout=5)
+            assert not reset1.is_alive()
+            assert not reset2.is_alive()
+            assert not new_worker.is_alive()
+            assert reset1_done.is_set()
+            assert reset2_done.is_set()
+            assert new_done.is_set()
+            assert late["reset1_status"] == 200
+            assert late["reset2_status"] == 200
+            assert owner_order == [store.reset_generation() - 1]
+            assert store.reset_generation() == owner_order[0] + 1
+            assert old_status == 409
+            assert old_body_json["error"] == "epoch_stale"
+            assert late["new_status"] == 201
+            task_id = late["new_body"]["id"]
+        finally:
+            old_sock.close()
+
+        with httpx.Client(timeout=2.0) as client:
+            fetched = client.get(f"{base}/v1/tasks/{task_id}")
+            assert fetched.status_code == 200
+            assert fetched.json()["id"] == task_id
+            events = client.get(f"{base}/v1/admin/events").json()["events"]
+            types = [event["type"] for event in events]
+            assert "task_requested" in types
+            assert "task_committed" in types
+            traces = {event["trace_id"] for event in events}
+            assert traces == {f"tr_{store.epoch():06d}_000001"}
+        assert store.in_flight_total() == 0
+        assert store.pending_reset_count() == 0
+        assert not store.is_resetting()
+    finally:
+        _stop_uvicorn(server, thread)
+        store.reset()
+
+
+def test_overlapping_resets_cannot_erase_acknowledged_fault() -> None:
+    store.settings = Settings(seed="obj-002", state_path=None)
+    store.reset()
+    server, thread, host, port = _start_uvicorn(app)
+    try:
+        base = f"http://{host}:{port}"
+        body = json.dumps(
+            {"mode": "fail_before_commit", "remaining": 1},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        first_bytes = max(1, len(body) // 3)
+        sock = _send_partial_request(
+            host,
+            port,
+            "PUT",
+            "/v1/admin/faults",
+            {},
+            body,
+            first_bytes,
+        )
+        try:
+            _wait_until(lambda: store.in_flight_total() >= 1)
+            late: dict[str, object] = {}
+            reset1_done = threading.Event()
+            reset2_done = threading.Event()
+            owner_order: list[int] = []
+
+            def _reset(name: str, done: threading.Event) -> None:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.post(f"{base}/v1/admin/reset")
+                    late[f"{name}_status"] = response.status_code
+                done.set()
+
+            reset1 = threading.Thread(target=_reset, args=("reset1", reset1_done))
+            reset1.start()
+            _wait_until(store.is_resetting)
+            owner_order.append(store.reset_generation())
+            reset2 = threading.Thread(target=_reset, args=("reset2", reset2_done))
+            reset2.start()
+            _wait_until(lambda: store.pending_reset_count() >= 2)
+            assert store.reset_generation() == owner_order[0]
+            time.sleep(0.1)
+            assert not reset1_done.is_set()
+            assert not reset2_done.is_set()
+
+            new_done = threading.Event()
+
+            def _new_fault() -> None:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.put(
+                        f"{base}/v1/admin/faults",
+                        json={"mode": "delay", "delay_ms": 5, "remaining": 1},
+                    )
+                    late["new_status"] = response.status_code
+                    late["new_body"] = response.json()
+                new_done.set()
+
+            new_worker = threading.Thread(target=_new_fault)
+            new_worker.start()
+            time.sleep(0.1)
+            assert not new_done.is_set()
+            assert not reset1_done.is_set()
+            assert not reset2_done.is_set()
+
+            _finish_body(sock, body, first_bytes)
+            old_status, old_body = _read_http_response(sock)
+            reset1.join(timeout=5)
+            reset2.join(timeout=5)
+            new_worker.join(timeout=5)
+            assert not reset1.is_alive()
+            assert not reset2.is_alive()
+            assert not new_worker.is_alive()
+            assert late["reset1_status"] == 200
+            assert late["reset2_status"] == 200
+            assert owner_order == [store.reset_generation() - 1]
+            assert store.reset_generation() == owner_order[0] + 1
+            assert old_status == 409
+            assert old_body["error"] == "epoch_stale"
+            assert late["new_status"] == 200
+            assert late["new_body"]["mode"] == "delay"
+        finally:
+            sock.close()
+
+        with httpx.Client(timeout=2.0) as client:
+            current = client.get(f"{base}/v1/admin/faults").json()
+            assert current["mode"] == "delay"
+            assert current["remaining"] == 1
+            types = [
+                event["type"]
+                for event in client.get(f"{base}/v1/admin/events").json()["events"]
+            ]
+            assert "fault_configured" in types
+        assert store.pending_reset_count() == 0
+        assert not store.is_resetting()
+    finally:
+        _stop_uvicorn(server, thread)
+        store.reset()
+

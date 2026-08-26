@@ -379,3 +379,128 @@ def test_restore_reset_does_not_reuse_issued_trace(tmp_path: Path) -> None:
     after = {event["trace_id"] for event in restored.events}
     assert after
     assert issued.isdisjoint(after)
+
+
+def test_collapsed_two_operation_trace_history_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    slot_ids = list(first.slots)
+    first.create_booking("collapse-a-0001", slot_ids[0], "synth-ada")
+    first.create_booking("collapse-b-0001", slot_ids[1], "synth-ben")
+    traces = [event["trace_id"] for event in first.events]
+    assert traces == ["tr_000001_000001", "tr_000001_000002"]
+
+    def mutate(payload: dict) -> None:
+        for event in payload["events"]:
+            if event["trace_id"] == "tr_000001_000002":
+                event["trace_id"] = "tr_000001_000001"
+        payload["trace"] = 1
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "collapsed trace history")
+
+
+def test_valid_multi_event_single_trace_restore(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    slot_id = _first_slot_id(first)
+    epoch, trace_id = first.begin_request(
+        "booking_requested",
+        idempotency_key="multi-event-0001",
+        slot_id=slot_id,
+        patient_ref="synth-ada",
+    )
+    first.record(trace_id, "fault_injected", epoch=epoch, mode="delay")
+    first.record(trace_id, "response_delayed", epoch=epoch, delay_ms=5, mode="delay")
+    created = first.create_booking(
+        "multi-event-0001",
+        slot_id,
+        "synth-ada",
+        epoch=epoch,
+        trace_id=trace_id,
+    )
+    first.record(
+        trace_id,
+        "response_suppressed",
+        epoch=epoch,
+        reason="ambiguous_outcome",
+        booking_id=created["booking"]["id"],
+        committed=True,
+    )
+    first.finish_request(epoch)
+    second = Store(Settings(seed="obj-001", state_path=path))
+    restored = second.get_booking(created["booking"]["id"])
+    assert restored is not None
+    types = [event["type"] for event in second.events]
+    assert types == [
+        "booking_requested",
+        "fault_injected",
+        "response_delayed",
+        "booking_committed",
+        "response_suppressed",
+    ]
+    assert {event["trace_id"] for event in second.events} == {trace_id}
+
+
+def test_valid_replay_and_conflict_traces_restore(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    slot_ids = list(first.slots)
+    created = first.create_booking("replay-key-0001", slot_ids[0], "synth-ada")
+    epoch, replay_trace = first.begin_request(
+        "booking_requested",
+        idempotency_key="replay-key-0001",
+        slot_id=slot_ids[0],
+        patient_ref="synth-ada",
+    )
+    replay = first.create_booking(
+        "replay-key-0001",
+        slot_ids[0],
+        "synth-ada",
+        epoch=epoch,
+        trace_id=replay_trace,
+    )
+    first.finish_request(epoch)
+    assert replay["kind"] == "replay"
+    conflict_epoch, conflict_trace = first.begin_request(
+        "booking_requested",
+        idempotency_key="replay-key-0001",
+        slot_id=slot_ids[1],
+        patient_ref="synth-ben",
+    )
+    conflict = first.create_booking(
+        "replay-key-0001",
+        slot_ids[1],
+        "synth-ben",
+        epoch=conflict_epoch,
+        trace_id=conflict_trace,
+    )
+    first.finish_request(conflict_epoch)
+    assert conflict["kind"] == "idempotency_conflict"
+    second = Store(Settings(seed="obj-001", state_path=path))
+    assert second.get_booking(created["booking"]["id"]) is not None
+    types = [event["type"] for event in second.events]
+    assert "booking_committed" in types
+    assert "booking_replayed" in types
+    assert "conflict" in types
+
+
+def test_restore_restart_reset_allocation_never_reuses_trace(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    slot_ids = list(first.slots)
+    first.create_booking("alloc-keep-0001", slot_ids[0], "synth-ada")
+    first.create_booking("alloc-keep-0002", slot_ids[1], "synth-ben")
+    issued = {event["trace_id"] for event in first.events}
+    restored = Store(Settings(seed="obj-001", state_path=path))
+    allocated = restored.next_trace_id()
+    issued.add(allocated)
+    restarted = Store(Settings(seed="obj-001", state_path=path))
+    allocated_again = restarted.next_trace_id()
+    assert allocated_again not in issued
+    issued.add(allocated_again)
+    restarted.reset()
+    after_reset = restarted.next_trace_id()
+    assert after_reset not in issued
+    assert len(issued | {allocated, allocated_again, after_reset}) == len(issued) + 1
+

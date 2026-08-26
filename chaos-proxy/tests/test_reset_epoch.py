@@ -9,6 +9,15 @@ import httpx
 import pytest
 
 
+def _wait_until(predicate, *, timeout: float = 2.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition was not met before timeout")
+
+
 def _read_http_response(sock: socket.socket) -> tuple[int, dict]:
     sock.settimeout(5)
     buf = bytearray()
@@ -259,3 +268,206 @@ def test_partial_fault_put_cannot_configure_new_epoch(
         assert "fault_configured" in types
     finally:
         sock.close()
+
+
+def test_overlapping_resets_serialize_data_plane_and_preserve_new_request(
+    chaos: dict[str, object],
+    http: httpx.Client,
+) -> None:
+    admin_url = str(chaos["admin_url"])
+    proxy_url = str(chaos["proxy_url"])
+    controller = chaos["controller"]
+    parsed = httpx.URL(proxy_url)
+    host = parsed.host
+    port = parsed.port
+    assert host is not None and port is not None
+    body = b'{"slot_id":"slot-1","patient_ref":"synth-ada"}'
+    first_bytes = 12
+    header = (
+        "POST /v1/bookings HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Idempotency-Key: raw-old-overlap-proxy\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("ascii")
+    sock = socket.create_connection((host, port), timeout=5)
+    try:
+        sock.sendall(header + body[:first_bytes])
+        _wait_until(lambda: controller.in_flight_total() >= 1)
+        late: dict[str, object] = {}
+        reset1_done = threading.Event()
+        reset2_done = threading.Event()
+        owner_order: list[int] = []
+
+        def _reset(name: str, done: threading.Event) -> None:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.post(f"{admin_url}/v1/admin/reset")
+                late[f"{name}_status"] = response.status_code
+                late[f"{name}_body"] = response.json()
+            done.set()
+
+        reset1 = threading.Thread(target=_reset, args=("reset1", reset1_done))
+        reset1.start()
+        _wait_until(controller.is_resetting)
+        owner_order.append(controller.reset_generation())
+        assert not reset1_done.is_set()
+        reset2 = threading.Thread(target=_reset, args=("reset2", reset2_done))
+        reset2.start()
+        _wait_until(lambda: controller.pending_reset_count() >= 2)
+        assert controller.reset_generation() == owner_order[0]
+        time.sleep(0.1)
+        assert not reset1_done.is_set()
+        assert not reset2_done.is_set()
+
+        new_done = threading.Event()
+
+        def _new_post() -> None:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.post(
+                    f"{proxy_url}/v1/bookings",
+                    headers={"Idempotency-Key": "raw-new-overlap-proxy"},
+                    json={"slot_id": "slot-1", "patient_ref": "synth-ada"},
+                )
+                late["new_status"] = response.status_code
+            new_done.set()
+
+        new_worker = threading.Thread(target=_new_post)
+        new_worker.start()
+        time.sleep(0.1)
+        assert not new_done.is_set()
+        assert not reset1_done.is_set()
+        assert not reset2_done.is_set()
+
+        sock.sendall(body[first_bytes:])
+        sock.settimeout(5)
+        leftover = sock.recv(4096)
+        reset1.join(timeout=5)
+        reset2.join(timeout=5)
+        new_worker.join(timeout=5)
+        assert not reset1.is_alive()
+        assert not reset2.is_alive()
+        assert not new_worker.is_alive()
+        assert late["reset1_status"] == 200
+        assert late["reset2_status"] == 200
+        assert owner_order == [controller.reset_generation() - 1]
+        assert controller.reset_generation() == owner_order[0] + 1
+        assert leftover
+        assert late["new_status"] == 201
+        types = [event["type"] for event in controller.events()]
+        assert "fault_consumed" not in types
+        armed = http.put(
+            f"{admin_url}/v1/admin/faults",
+            json={
+                "mode": "drop_before_upstream",
+                "remaining": 1,
+                "method": "POST",
+                "path": "/v1/tasks",
+            },
+        )
+        assert armed.status_code == 200
+        current = http.get(f"{admin_url}/v1/admin/faults").json()
+        assert current["mode"] == "drop_before_upstream"
+        assert current["remaining"] == 1
+        assert controller.pending_reset_count() == 0
+        assert not controller.is_resetting()
+    finally:
+        sock.close()
+
+
+def test_overlapping_resets_cannot_erase_acknowledged_fault(
+    chaos: dict[str, object],
+    http: httpx.Client,
+) -> None:
+    admin_url = str(chaos["admin_url"])
+    controller = chaos["controller"]
+    parsed = httpx.URL(admin_url)
+    host = parsed.host
+    port = parsed.port
+    assert host is not None and port is not None
+    body = (
+        b'{"mode":"drop_before_upstream","remaining":1,'
+        b'"method":"POST","path":"/v1/bookings"}'
+    )
+    first_bytes = 20
+    header = (
+        "PUT /v1/admin/faults HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("ascii")
+    sock = socket.create_connection((host, port), timeout=5)
+    try:
+        sock.sendall(header + body[:first_bytes])
+        _wait_until(lambda: controller.in_flight_total() >= 1)
+        late: dict[str, object] = {}
+        reset1_done = threading.Event()
+        reset2_done = threading.Event()
+        owner_order: list[int] = []
+
+        def _reset(name: str, done: threading.Event) -> None:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.post(f"{admin_url}/v1/admin/reset")
+                late[f"{name}_status"] = response.status_code
+            done.set()
+
+        reset1 = threading.Thread(target=_reset, args=("reset1", reset1_done))
+        reset1.start()
+        _wait_until(controller.is_resetting)
+        owner_order.append(controller.reset_generation())
+        reset2 = threading.Thread(target=_reset, args=("reset2", reset2_done))
+        reset2.start()
+        _wait_until(lambda: controller.pending_reset_count() >= 2)
+        assert controller.reset_generation() == owner_order[0]
+        time.sleep(0.1)
+        assert not reset1_done.is_set()
+        assert not reset2_done.is_set()
+
+        new_done = threading.Event()
+
+        def _new_fault() -> None:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.put(
+                    f"{admin_url}/v1/admin/faults",
+                    json={"mode": "delay", "delay_ms": 5, "remaining": 1},
+                )
+                late["new_status"] = response.status_code
+                late["new_body"] = response.json()
+            new_done.set()
+
+        new_worker = threading.Thread(target=_new_fault)
+        new_worker.start()
+        time.sleep(0.1)
+        assert not new_done.is_set()
+        assert not reset1_done.is_set()
+        assert not reset2_done.is_set()
+
+        sock.sendall(body[first_bytes:])
+        old_status, old_body = _read_http_response(sock)
+        reset1.join(timeout=5)
+        reset2.join(timeout=5)
+        new_worker.join(timeout=5)
+        assert not reset1.is_alive()
+        assert not reset2.is_alive()
+        assert not new_worker.is_alive()
+        assert late["reset1_status"] == 200
+        assert late["reset2_status"] == 200
+        assert owner_order == [controller.reset_generation() - 1]
+        assert controller.reset_generation() == owner_order[0] + 1
+        assert old_status == 409
+        assert old_body["error"] == "epoch_stale"
+        assert late["new_status"] == 200
+        assert late["new_body"]["mode"] == "delay"
+        current = http.get(f"{admin_url}/v1/admin/faults").json()
+        assert current["mode"] == "delay"
+        assert current["remaining"] == 1
+        types = [event["type"] for event in controller.events()]
+        assert types == ["fault_configured"]
+        assert controller.pending_reset_count() == 0
+        assert not controller.is_resetting()
+    finally:
+        sock.close()
+
