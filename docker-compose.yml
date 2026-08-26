@@ -31,3 +31,34 @@ services:
       FORGE_SEED: obj-001
     volumes:
       - ./docker-compose.yml:/docker-compose.yml:ro
+
+  fake-pvs:
+    build:
+      context: ./fake-pvs
+      target: runtime
+    ports:
+      # Unauthenticated admin/fault/reset controls stay on loopback by default.
+      - "127.0.0.1:8081:8081"
+    environment:
+      FORGE_SEED: obj-002
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  fake-pvs-tests:
+    profiles: ["test"]
+    build:
+      context: ./fake-pvs
+      target: test
+    environment:
+      FORGE_SEED: obj-002
+    volumes:
+      - ./docker-compose.yml:/docker-compose.yml:ro
