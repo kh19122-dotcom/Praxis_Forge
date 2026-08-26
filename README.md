@@ -205,6 +205,93 @@ pytest -q
 
 The test suite covers patient/encounter reads, synthetic-identifier enforcement, idempotent task creation, missing-patient/validation/conflict/infrastructure failures, delayed response, and ambiguous remote-effect recovery from Forge evidence.
 
+## Chaos proxy
+
+The fourth vertical slice is a standalone HTTP transport-chaos proxy in front of Fake Booking and Fake PVS. It does not import either simulator package and does not own simulator state.
+
+Direct simulator endpoints remain authoritative:
+
+| Surface | Host URL | Compose network |
+|---|---|---|
+| Fake Booking | `http://127.0.0.1:8080` | `http://fake-booking:8080` |
+| Fake PVS | `http://127.0.0.1:8081` | `http://fake-pvs:8081` |
+
+Chaos-proxied data-plane endpoints:
+
+| Surface | Host URL | Compose network |
+|---|---|---|
+| Booking via chaos proxy | `http://127.0.0.1:8090` | `http://chaos-booking:8090` |
+| PVS via chaos proxy | `http://127.0.0.1:8091` | `http://chaos-pvs:8091` |
+
+Chaos admin/control surfaces (loopback-only on the host):
+
+| Surface | Host URL | Compose network |
+|---|---|---|
+| Booking chaos admin | `http://127.0.0.1:8092` | `http://chaos-booking:8092` |
+| PVS chaos admin | `http://127.0.0.1:8093` | `http://chaos-pvs:8093` |
+
+The proxy is test infrastructure only, not production ingress. Use direct simulator URLs for ordinary reads, resets, and semantic fault injection. Use chaos-proxied URLs only when the client should observe a real connection drop, timeout, or missing acknowledgement.
+
+### Run with Docker Compose
+
+```bash
+docker compose up --build fake-booking fake-pvs chaos-booking chaos-pvs
+```
+
+Arm the next matching request, then call the proxied data plane:
+
+```bash
+curl -s -X PUT http://127.0.0.1:8092/v1/admin/faults \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"drop_after_upstream","remaining":1,"method":"POST","path":"/v1/bookings"}'
+
+curl -s -X POST http://127.0.0.1:8090/v1/bookings \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: demo-key-0001' \
+  -d '{"slot_id":"<slot-id>","patient_ref":"synth-ada"}'
+```
+
+That client call should fail at the transport layer. Recover the committed booking from the direct simulator evidence APIs (`/v1/admin/events` and `/v1/bookings/{id}`).
+
+Reset armed faults and proxy events:
+
+```bash
+curl -s -X POST http://127.0.0.1:8092/v1/admin/reset
+curl -s -X POST http://127.0.0.1:8093/v1/admin/reset
+```
+
+### Deterministic transport faults
+
+`PUT /v1/admin/faults` on a chaos admin port accepts:
+
+| `mode` | Effect |
+|---|---|
+| `none` | Forward normally |
+| `delay` | Forward upstream, then delay the downstream response by `delay_ms` |
+| `drop_before_upstream` | Close the client connection before any upstream request is sent |
+| `drop_after_upstream` | Complete the upstream request, then close the client connection without a response |
+
+`remaining` is the number of matching proxied requests that consume the fault. Optional `method`, `path`, and `idempotency_key` scope the fault. `/healthz` on the data plane is never consumed.
+
+### Tests
+
+Docker (from the repository root):
+
+```bash
+docker compose --profile test run --rm chaos-proxy-tests
+```
+
+Local (Python 3.12+):
+
+```bash
+cd chaos-proxy
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+ruff check src tests
+pytest -q
+```
+
 ## Scenario runner
 
 The third vertical slice is a standalone HTTP-only CLI that treats Fake Booking and Fake PVS as external vendors. It does not import either simulator package.
@@ -214,7 +301,7 @@ Fixed seeds expected by the named suite:
 - Fake Booking: `obj-001`
 - Fake PVS: `obj-002`
 
-Named scenarios:
+Semantic scenarios (`--suite semantic`, default):
 
 | Name | What it proves |
 |---|---|
@@ -225,7 +312,15 @@ Named scenarios:
 | `pvs-ambiguous-recovery` | PVS task `504` is client-uncertain; evidence APIs show the commit |
 | `conflict-idempotency` | Slot conflict plus idempotent replay/conflict on both services |
 
-Each scenario starts with `POST /v1/admin/reset` on both services and injects faults only through `PUT /v1/admin/faults`. The CLI prints one JSON object to stdout. Process exit code `0` means the suite passed; any scenario or health-check failure exits `1`.
+Transport-chaos scenarios (`--suite transport-chaos`):
+
+| Name | What it proves |
+|---|---|
+| `booking-transport-drop-before-upstream` | Proxied booking drop before upstream leaves no remote booking |
+| `booking-transport-drop-after-upstream` | Booking commits, client sees a transport error, evidence/replay recover the same booking |
+| `pvs-transport-drop-after-upstream` | PVS task commits, client sees a transport error, evidence/replay recover the same task |
+
+Semantic scenarios start with `POST /v1/admin/reset` on both simulators and inject faults only through simulator `PUT /v1/admin/faults`. Transport-chaos scenarios also reset/arm the chaos proxies and send mutating calls through chaos-proxied endpoints. Evidence reads stay on the direct simulator APIs. The CLI prints one JSON object to stdout. Process exit code `0` means the suite passed; any scenario or health-check failure exits `1`.
 
 ### Run the suite against Compose services
 
@@ -235,12 +330,21 @@ macOS and Linux, from a fresh checkout of the repository root:
 docker compose --profile scenario run --rm --build scenario-runner
 ```
 
-That command starts both simulators, waits for their health checks, and runs every named scenario over the Compose network (`http://fake-booking:8080` and `http://fake-pvs:8081`). Admin/reset/fault ports remain loopback-only on the host.
+That command starts both simulators, waits for their health checks, and runs every semantic scenario over the Compose network (`http://fake-booking:8080` and `http://fake-pvs:8081`). Admin/reset/fault ports remain loopback-only on the host.
+
+Run the transport-chaos suite against real containers:
+
+```bash
+docker compose --profile scenario run --rm --build scenario-runner-transport
+```
+
+That command starts both simulators and both chaos proxies, then runs `--suite transport-chaos`. Mutating writes go through `http://chaos-booking:8090` and `http://chaos-pvs:8091`. Evidence/admin reads stay on the simulators.
 
 List scenario names:
 
 ```bash
 docker compose --profile scenario run --rm --build scenario-runner --list
+docker compose --profile scenario run --rm --build scenario-runner --list --suite transport-chaos
 ```
 
 Run one named scenario:
@@ -267,6 +371,16 @@ scenario-runner --scenario combined-happy-path
 
 The defaults are `http://127.0.0.1:8080` and `http://127.0.0.1:8081`. Override with `--booking-url`, `--pvs-url`, or `FORGE_BOOKING_URL` / `FORGE_PVS_URL`.
 
+Transport-chaos from the host also needs the proxies:
+
+```bash
+docker compose up --build -d fake-booking fake-pvs chaos-booking chaos-pvs
+scenario-runner --suite transport-chaos --list
+scenario-runner --suite transport-chaos
+```
+
+Host defaults for chaos URLs are `http://127.0.0.1:8090`, `http://127.0.0.1:8091`, `http://127.0.0.1:8092`, and `http://127.0.0.1:8093`.
+
 ### Tests
 
 Docker (from the repository root):
@@ -286,4 +400,4 @@ ruff check src tests
 pytest -q
 ```
 
-The unit suite uses in-process HTTP fakes. CI also runs the named suite against real Compose containers.
+The unit suite uses in-process HTTP fakes. CI also runs the semantic suite and the transport-chaos suite against real Compose containers.

@@ -438,10 +438,135 @@ class FakePvs(_Service):
         return self.json_response(201, _public_task(task))
 
 
+class FakeChaos:
+    def __init__(self, name: str, upstream) -> None:
+        self.name = name
+        self.upstream = upstream
+        self.reset()
+
+    def reset(self) -> None:
+        self.events: list[dict[str, Any]] = []
+        self.fault: dict[str, Any] = {
+            "mode": "none",
+            "delay_ms": 50,
+            "remaining": 0,
+            "method": None,
+            "path": None,
+            "idempotency_key": None,
+        }
+        self._seq = 0
+
+    def record(self, event_type: str, **details: object) -> None:
+        self._seq += 1
+        self.events.append({"seq": self._seq, "type": event_type, "details": details})
+
+    def consume(
+        self, method: str, path: str, idempotency_key: str | None
+    ) -> dict[str, Any] | None:
+        current = dict(self.fault)
+        if current["mode"] == "none" or current["remaining"] <= 0:
+            return None
+        if current["method"] and current["method"] != method:
+            return None
+        if current["path"] and current["path"] != path:
+            return None
+        if current["idempotency_key"] and current["idempotency_key"] != idempotency_key:
+            return None
+        remaining = current["remaining"] - 1
+        self.fault = {
+            "mode": current["mode"] if remaining > 0 else "none",
+            "delay_ms": current["delay_ms"],
+            "remaining": remaining,
+            "method": current["method"] if remaining > 0 else None,
+            "path": current["path"] if remaining > 0 else None,
+            "idempotency_key": current["idempotency_key"] if remaining > 0 else None,
+        }
+        self.record(
+            "fault_consumed",
+            mode=current["mode"],
+            remaining=remaining,
+            method=method,
+            path=path,
+            idempotency_key=idempotency_key,
+        )
+        return current
+
+    def json_response(self, status: int, payload: dict[str, Any]) -> httpx.Response:
+        return httpx.Response(status, json=payload)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        parsed = urlparse(str(request.url))
+        path = parsed.path
+        method = request.method.upper()
+        key = request.headers.get("Idempotency-Key")
+        self.record("request_received", method=method, path=path, idempotency_key=key)
+        fault = None
+        if not (method == "GET" and path == "/healthz"):
+            fault = self.consume(method, path, key)
+        if fault and fault["mode"] == "drop_before_upstream":
+            self.record(
+                "dropped_before_upstream",
+                method=method,
+                path=path,
+                idempotency_key=key,
+            )
+            raise httpx.ConnectError("dropped before upstream", request=request)
+        response = self.upstream(request)
+        self.record(
+            "upstream_completed",
+            method=method,
+            path=path,
+            idempotency_key=key,
+            upstream_status=response.status_code,
+        )
+        if fault and fault["mode"] == "drop_after_upstream":
+            self.record(
+                "dropped_after_upstream",
+                method=method,
+                path=path,
+                idempotency_key=key,
+                upstream_status=response.status_code,
+            )
+            raise httpx.ReadError("dropped after upstream", request=request)
+        return response
+
+    def handle_admin(self, request: httpx.Request) -> httpx.Response:
+        parsed = urlparse(str(request.url))
+        if parsed.path == "/healthz" and request.method == "GET":
+            return self.json_response(
+                200, {"status": "ok", "service": self.name, "upstream": "fake"}
+            )
+        if parsed.path == "/v1/admin/reset" and request.method == "POST":
+            self.reset()
+            return self.json_response(200, {"status": "reset", "service": self.name})
+        if parsed.path == "/v1/admin/faults" and request.method == "GET":
+            return self.json_response(200, self.fault)
+        if parsed.path == "/v1/admin/faults" and request.method == "PUT":
+            payload = json.loads(request.content.decode() or "{}")
+            mode = payload.get("mode", "none")
+            remaining = 0 if mode == "none" else int(payload.get("remaining", 1))
+            method = payload.get("method")
+            self.fault = {
+                "mode": mode,
+                "delay_ms": int(payload.get("delay_ms", 50)),
+                "remaining": remaining,
+                "method": method.upper() if isinstance(method, str) else None,
+                "path": payload.get("path"),
+                "idempotency_key": payload.get("idempotency_key"),
+            }
+            self.record("fault_configured", **self.fault)
+            return self.json_response(200, self.fault)
+        if parsed.path == "/v1/admin/events" and request.method == "GET":
+            return self.json_response(200, {"service": self.name, "events": self.events})
+        return self.json_response(404, {"error": "not_found"})
+
+
 class FakeForge:
     def __init__(self) -> None:
         self.booking = FakeBooking()
         self.pvs = FakePvs()
+        self.booking_chaos = FakeChaos("chaos-booking", self.booking.handle)
+        self.pvs_chaos = FakeChaos("chaos-pvs", self.pvs.handle)
 
 
 def _public_booking(booking: dict[str, Any]) -> dict[str, Any]:

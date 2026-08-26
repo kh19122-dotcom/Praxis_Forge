@@ -88,3 +88,24 @@ class ScenarioContext:
             )
         self.check(name, True, service=service, call=call, detail=detail)
         return call.body
+
+    def expect_transport_error(
+        self,
+        name: str,
+        call: HttpCall,
+        *,
+        service: str,
+        detail: str | None = None,
+    ) -> None:
+        ok = call.error is not None and call.status_code is None
+        self.check(
+            name,
+            ok,
+            service=service,
+            call=call,
+            detail=detail
+            or (
+                "expected client-visible transport error, "
+                f"got status={call.status_code!r} body={call.body!r} error={call.error!r}"
+            ),
+        )

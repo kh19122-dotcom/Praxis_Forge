@@ -48,6 +48,7 @@ class ServiceClient:
         json: Any | None = None,
         headers: dict[str, str] | None = None,
         params: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> HttpCall:
         url = f"{self.base_url}{path}"
         try:
@@ -57,6 +58,7 @@ class ServiceClient:
                 json=json,
                 headers=headers,
                 params=params,
+                timeout=timeout,
             )
         except httpx.HTTPError as exc:
             return HttpCall(
@@ -65,7 +67,7 @@ class ServiceClient:
                 path=path,
                 status_code=None,
                 body=None,
-                error=str(exc),
+                error=f"{type(exc).__name__}: {exc}",
             )
         try:
             body: Any = response.json()
@@ -82,3 +84,34 @@ class ServiceClient:
     def close(self) -> None:
         if self._owns_client:
             self._client.close()
+
+
+class ForgeSession:
+    def __init__(
+        self,
+        booking: ServiceClient,
+        pvs: ServiceClient,
+        *,
+        booking_chaos: ServiceClient | None = None,
+        pvs_chaos: ServiceClient | None = None,
+        booking_chaos_admin: ServiceClient | None = None,
+        pvs_chaos_admin: ServiceClient | None = None,
+    ) -> None:
+        self.booking = booking
+        self.pvs = pvs
+        self.booking_chaos = booking_chaos
+        self.pvs_chaos = pvs_chaos
+        self.booking_chaos_admin = booking_chaos_admin
+        self.pvs_chaos_admin = pvs_chaos_admin
+
+    def close_owned(self) -> None:
+        self.booking.close()
+        self.pvs.close()
+        for client in (
+            self.booking_chaos,
+            self.pvs_chaos,
+            self.booking_chaos_admin,
+            self.pvs_chaos_admin,
+        ):
+            if client is not None:
+                client.close()

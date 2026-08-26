@@ -63,6 +63,70 @@ services:
     volumes:
       - ./docker-compose.yml:/docker-compose.yml:ro
 
+  chaos-booking:
+    build:
+      context: ./chaos-proxy
+      target: runtime
+    ports:
+      # Data-plane and unauthenticated admin controls stay on loopback by default.
+      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:8092:8092"
+    environment:
+      FORGE_UPSTREAM_URL: http://fake-booking:8080
+      FORGE_PROXY_PORT: "8090"
+      FORGE_ADMIN_PORT: "8092"
+      FORGE_SERVICE_NAME: chaos-booking
+    depends_on:
+      fake-booking:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz'); urllib.request.urlopen('http://127.0.0.1:8092/healthz')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  chaos-pvs:
+    build:
+      context: ./chaos-proxy
+      target: runtime
+    ports:
+      # Data-plane and unauthenticated admin controls stay on loopback by default.
+      - "127.0.0.1:8091:8091"
+      - "127.0.0.1:8093:8093"
+    environment:
+      FORGE_UPSTREAM_URL: http://fake-pvs:8081
+      FORGE_PROXY_PORT: "8091"
+      FORGE_ADMIN_PORT: "8093"
+      FORGE_SERVICE_NAME: chaos-pvs
+    depends_on:
+      fake-pvs:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthz'); urllib.request.urlopen('http://127.0.0.1:8093/healthz')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  chaos-proxy-tests:
+    profiles: ["test"]
+    build:
+      context: ./chaos-proxy
+      target: test
+    volumes:
+      - ./docker-compose.yml:/docker-compose.yml:ro
+
   scenario-runner:
     profiles: ["scenario"]
     build:
@@ -75,6 +139,29 @@ services:
       fake-booking:
         condition: service_healthy
       fake-pvs:
+        condition: service_healthy
+
+  scenario-runner-transport:
+    profiles: ["scenario"]
+    build:
+      context: ./scenario-runner
+      target: runtime
+    environment:
+      FORGE_BOOKING_URL: http://fake-booking:8080
+      FORGE_PVS_URL: http://fake-pvs:8081
+      FORGE_BOOKING_CHAOS_URL: http://chaos-booking:8090
+      FORGE_PVS_CHAOS_URL: http://chaos-pvs:8091
+      FORGE_BOOKING_CHAOS_ADMIN_URL: http://chaos-booking:8092
+      FORGE_PVS_CHAOS_ADMIN_URL: http://chaos-pvs:8093
+    command: ["--suite", "transport-chaos"]
+    depends_on:
+      fake-booking:
+        condition: service_healthy
+      fake-pvs:
+        condition: service_healthy
+      chaos-booking:
+        condition: service_healthy
+      chaos-pvs:
         condition: service_healthy
 
   scenario-runner-tests:
