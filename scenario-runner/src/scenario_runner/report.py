@@ -57,14 +57,20 @@ class SuiteReport:
     pvs_url: str
     booking_seed: str | None = None
     pvs_seed: str | None = None
+    suite: str | None = None
+    booking_chaos_url: str | None = None
+    pvs_chaos_url: str | None = None
     scenarios: list[ScenarioResult] = field(default_factory=list)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
+            "suite": self.suite,
             "booking_url": self.booking_url,
             "pvs_url": self.pvs_url,
+            "booking_chaos_url": self.booking_chaos_url,
+            "pvs_chaos_url": self.pvs_chaos_url,
             "booking_seed": self.booking_seed,
             "pvs_seed": self.pvs_seed,
             "scenarios": [scenario.to_dict() for scenario in self.scenarios],

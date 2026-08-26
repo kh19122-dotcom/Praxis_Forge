@@ -39,6 +39,23 @@ jobs:
       - name: Test
         run: pytest -q
 
+  chaos-proxy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chaos-proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests
+      - name: Test
+        run: pytest -q
+
   scenario-runner:
     runs-on: ubuntu-latest
     defaults:
@@ -62,3 +79,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run named scenarios against Compose services
         run: docker compose --profile scenario run --rm --build scenario-runner
+
+  transport-chaos-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run transport-chaos scenarios against Compose services
+        run: docker compose --profile scenario run --rm --build scenario-runner-transport

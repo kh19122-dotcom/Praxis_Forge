@@ -11,6 +11,10 @@ from scenario_runner.runner import list_scenario_names, run_suite
 
 DEFAULT_BOOKING_URL = "http://127.0.0.1:8080"
 DEFAULT_PVS_URL = "http://127.0.0.1:8081"
+DEFAULT_BOOKING_CHAOS_URL = "http://127.0.0.1:8090"
+DEFAULT_PVS_CHAOS_URL = "http://127.0.0.1:8091"
+DEFAULT_BOOKING_CHAOS_ADMIN_URL = "http://127.0.0.1:8092"
+DEFAULT_PVS_CHAOS_ADMIN_URL = "http://127.0.0.1:8093"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,11 +35,50 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Fake PVS base URL (default: {DEFAULT_PVS_URL})",
     )
     parser.add_argument(
+        "--booking-chaos-url",
+        default=os.environ.get("FORGE_BOOKING_CHAOS_URL", DEFAULT_BOOKING_CHAOS_URL),
+        help=(
+            "Booking chaos-proxy data-plane URL "
+            f"(default: {DEFAULT_BOOKING_CHAOS_URL})"
+        ),
+    )
+    parser.add_argument(
+        "--pvs-chaos-url",
+        default=os.environ.get("FORGE_PVS_CHAOS_URL", DEFAULT_PVS_CHAOS_URL),
+        help=f"PVS chaos-proxy data-plane URL (default: {DEFAULT_PVS_CHAOS_URL})",
+    )
+    parser.add_argument(
+        "--booking-chaos-admin-url",
+        default=os.environ.get(
+            "FORGE_BOOKING_CHAOS_ADMIN_URL", DEFAULT_BOOKING_CHAOS_ADMIN_URL
+        ),
+        help=(
+            "Booking chaos-proxy admin URL "
+            f"(default: {DEFAULT_BOOKING_CHAOS_ADMIN_URL})"
+        ),
+    )
+    parser.add_argument(
+        "--pvs-chaos-admin-url",
+        default=os.environ.get(
+            "FORGE_PVS_CHAOS_ADMIN_URL", DEFAULT_PVS_CHAOS_ADMIN_URL
+        ),
+        help=f"PVS chaos-proxy admin URL (default: {DEFAULT_PVS_CHAOS_ADMIN_URL})",
+    )
+    parser.add_argument(
+        "--suite",
+        choices=("semantic", "transport-chaos", "all"),
+        default="semantic",
+        help="Named suite to run when --scenario is omitted (default: semantic).",
+    )
+    parser.add_argument(
         "--scenario",
         action="append",
         dest="scenarios",
         metavar="NAME",
-        help="Scenario name to run; repeatable. Default: all named scenarios.",
+        help=(
+            "Scenario name to run; repeatable. "
+            "Default: all named scenarios in --suite."
+        ),
     )
     parser.add_argument(
         "--list",
@@ -54,14 +97,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.list:
-        json.dump({"scenarios": list_scenario_names()}, sys.stdout, indent=2)
+        json.dump(
+            {"suite": args.suite, "scenarios": list_scenario_names(args.suite)},
+            sys.stdout,
+            indent=2,
+        )
         sys.stdout.write("\n")
         return 0
     report = run_suite(
         args.booking_url,
         args.pvs_url,
         names=args.scenarios,
+        suite=args.suite,
         timeout=args.timeout,
+        booking_chaos_url=args.booking_chaos_url,
+        pvs_chaos_url=args.pvs_chaos_url,
+        booking_chaos_admin_url=args.booking_chaos_admin_url,
+        pvs_chaos_admin_url=args.pvs_chaos_admin_url,
     )
     json.dump(report.to_dict(), sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

@@ -11,6 +11,7 @@ from scenario_runner.http import ServiceClient
 from scenario_runner.report import SuiteReport
 from scenario_runner.runner import list_scenario_names, run_suite
 from scenario_runner.scenarios import SCENARIOS
+from scenario_runner.transport import TRANSPORT_SCENARIOS
 from tests.fake_services import FakeForge
 
 REQUIRED_SCENARIOS = {
@@ -22,10 +23,18 @@ REQUIRED_SCENARIOS = {
     "conflict-idempotency",
 }
 
+REQUIRED_TRANSPORT_SCENARIOS = {
+    "booking-transport-drop-before-upstream",
+    "booking-transport-drop-after-upstream",
+    "pvs-transport-drop-after-upstream",
+}
+
 
 def test_named_scenarios_are_registered() -> None:
     assert set(list_scenario_names()) == REQUIRED_SCENARIOS
     assert list(SCENARIOS) == list(list_scenario_names())
+    assert set(list_scenario_names("transport-chaos")) == REQUIRED_TRANSPORT_SCENARIOS
+    assert list(TRANSPORT_SCENARIOS) == list(list_scenario_names("transport-chaos"))
 
 
 def test_all_scenarios_pass_against_http_fakes(
@@ -68,6 +77,64 @@ def test_happy_path_records_ids_from_both_services(
     assert scenario.ids["slot_id"]
     assert scenario.ids["booking_trace_id"].startswith("tr_")
     assert scenario.ids["task_trace_id"].startswith("tr_")
+
+
+def test_transport_chaos_scenarios_pass_against_http_fakes(
+    booking_client: ServiceClient,
+    pvs_client: ServiceClient,
+    booking_chaos_client: ServiceClient,
+    pvs_chaos_client: ServiceClient,
+    booking_chaos_admin_client: ServiceClient,
+    pvs_chaos_admin_client: ServiceClient,
+) -> None:
+    report = run_suite(
+        "http://booking.test",
+        "http://pvs.test",
+        suite="transport-chaos",
+        booking_client=booking_client,
+        pvs_client=pvs_client,
+        booking_chaos_client=booking_chaos_client,
+        pvs_chaos_client=pvs_chaos_client,
+        booking_chaos_admin_client=booking_chaos_admin_client,
+        pvs_chaos_admin_client=pvs_chaos_admin_client,
+        booking_chaos_url="http://booking-chaos.test",
+        pvs_chaos_url="http://pvs-chaos.test",
+    )
+    assert report.status == "pass"
+    assert report.error is None
+    assert [scenario.name for scenario in report.scenarios] == list(
+        list_scenario_names("transport-chaos")
+    )
+    assert all(scenario.status == "pass" for scenario in report.scenarios)
+    drop_before = next(
+        scenario
+        for scenario in report.scenarios
+        if scenario.name == "booking-transport-drop-before-upstream"
+    )
+    drop_after = next(
+        scenario
+        for scenario in report.scenarios
+        if scenario.name == "booking-transport-drop-after-upstream"
+    )
+    pvs_drop = next(
+        scenario
+        for scenario in report.scenarios
+        if scenario.name == "pvs-transport-drop-after-upstream"
+    )
+    assert drop_before.ids["booking_id"].startswith("bkg_")
+    assert drop_after.ids["booking_id"].startswith("bkg_")
+    assert pvs_drop.ids["task_id"].startswith("tsk_")
+
+
+def test_transport_chaos_requires_proxy_urls() -> None:
+    report = run_suite(
+        "http://booking.test",
+        "http://pvs.test",
+        suite="transport-chaos",
+    )
+    assert report.status == "fail"
+    assert report.error
+    assert "chaos" in report.error
 
 
 def test_unknown_scenario_fails_without_http() -> None:
@@ -127,7 +194,13 @@ def test_cli_list_and_unreachable_services_exit_nonzero(
 ) -> None:
     assert main(["--list"]) == 0
     listed = json.loads(capsys.readouterr().out)
+    assert listed["suite"] == "semantic"
     assert listed["scenarios"] == list_scenario_names()
+
+    assert main(["--list", "--suite", "transport-chaos"]) == 0
+    transport_listed = json.loads(capsys.readouterr().out)
+    assert transport_listed["suite"] == "transport-chaos"
+    assert transport_listed["scenarios"] == list_scenario_names("transport-chaos")
 
     code = main(
         [
