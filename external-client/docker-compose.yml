@@ -1,0 +1,23 @@
+# Separate Compose project that joins the documented lab network only.
+# Intended vendor path is chaos-proxied Booking/PVS, not Fake Booking/Fake PVS.
+# Host/CI orchestrates Compose; this file does not mount the Docker socket.
+
+services:
+  external-client:
+    build:
+      context: .
+      target: runtime
+    environment:
+      FORGE_BOOKING_URL: http://chaos-booking:8090
+      FORGE_PVS_URL: http://chaos-pvs:8091
+      FORGE_BOOKING_CHAOS_ADMIN_URL: http://chaos-booking:8092
+      FORGE_PVS_CHAOS_ADMIN_URL: http://chaos-pvs:8093
+      FORGE_LAB_DNS_NAMES: chaos-booking,chaos-pvs,forge-booking,forge-pvs
+      FORGE_LAB_FORBIDDEN_DNS_NAMES: fake-booking,fake-pvs
+    networks:
+      - praxis-forge-lab
+
+networks:
+  praxis-forge-lab:
+    name: praxis-forge-lab
+    external: true

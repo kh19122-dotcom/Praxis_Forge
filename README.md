@@ -373,6 +373,115 @@ ruff check src tests
 pytest -q
 ```
 
+## Cross-Compose lab integration
+
+An explicit opt-in overlay makes Praxis Forge consumable from a second Docker Compose project on the same Linux or macOS host. Default `docker-compose.yml` behavior is unchanged: host publishes stay loopback-only (`127.0.0.1`), and Fake Booking / Fake PVS are not attached to the shared lab network.
+
+This is simulation-only private Docker networking. It is not a production topology, LAN exposure model, TLS/auth layer, or PraxisOS adapter. Peers on the lab network can reach chaos data-plane **and** chaos admin ports. Do not treat that as a security boundary.
+
+### Lab network and DNS
+
+Stable named bridge: `praxis-forge-lab` (`driver: bridge`).
+
+| Role | Stable DNS | Container port | Intended use |
+|---|---|---|---|
+| Booking vendor data plane | `chaos-booking`, `forge-booking` | `8090` | External clients |
+| PVS vendor data plane | `chaos-pvs`, `forge-pvs` | `8091` | External clients |
+| Booking chaos admin | `chaos-booking`, `forge-booking` | `8092` | Test-only fault arming |
+| PVS chaos admin | `chaos-pvs`, `forge-pvs` | `8093` | Test-only fault arming |
+
+URLs a second Compose project should use:
+
+- Booking: `http://chaos-booking:8090` (alias `http://forge-booking:8090`)
+- PVS: `http://chaos-pvs:8091` (alias `http://forge-pvs:8091`)
+- Booking chaos admin: `http://chaos-booking:8092`
+- PVS chaos admin: `http://chaos-pvs:8093`
+
+Attached to `praxis-forge-lab`: `chaos-booking`, `chaos-pvs`, and the joining external client. Not attached: `fake-booking`, `fake-pvs`. Those remain on the vendor project's default network so chaos-proxy can still reach them. The intended external vendor path is the chaos layer, not simulator process internals.
+
+Default host publishes remain:
+
+| Surface | Host URL |
+|---|---|
+| Fake Booking | `http://127.0.0.1:8080` |
+| Fake PVS | `http://127.0.0.1:8081` |
+| Booking via chaos proxy | `http://127.0.0.1:8090` |
+| PVS via chaos proxy | `http://127.0.0.1:8091` |
+| Booking chaos admin | `http://127.0.0.1:8092` |
+| PVS chaos admin | `http://127.0.0.1:8093` |
+
+Lab mode does not bind new host ports and does not publish on `0.0.0.0`.
+
+### Start Forge in lab mode
+
+From the repository root:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.lab.yml up --build -d \
+  fake-booking fake-pvs chaos-booking chaos-pvs
+```
+
+That creates or reuses `praxis-forge-lab` and attaches only the chaos proxies to it.
+
+### Join from another Compose project
+
+Declare the documented network as external and keep your client on that network only:
+
+```yaml
+services:
+  my-client:
+    networks:
+      - praxis-forge-lab
+
+networks:
+  praxis-forge-lab:
+    name: praxis-forge-lab
+    external: true
+```
+
+Do not import Fake Booking, Fake PVS, chaos-proxy, scenario-runner, or PraxisOS packages. Speak HTTP to the chaos-proxied DNS names above.
+
+### External-client smoke harness
+
+`external-client` is a separate HTTP-only Compose project. It validates Booking/PVS health, availability, writes, idempotent replay, and one transport-chaos drop (`drop_after_upstream`) through the shared lab network.
+
+```bash
+python3 scripts/cross_compose_lab.py
+```
+
+That host-side gate uses two distinct Compose project names (`praxis-forge-lab-vendor` and `praxis-forge-lab-client` by default), does not mount the Docker socket into application/test containers, and tears the stacks down afterward.
+
+Equivalent manual client run after Forge is already in lab mode:
+
+```bash
+docker compose -p praxis-forge-lab-client -f external-client/docker-compose.yml run --rm --build external-client
+```
+
+### Teardown
+
+```bash
+docker compose -p praxis-forge-lab-client -f external-client/docker-compose.yml down --volumes --remove-orphans
+docker compose -f docker-compose.yml -f docker-compose.lab.yml down --volumes --remove-orphans
+docker network rm praxis-forge-lab
+```
+
+`docker compose down` without the lab overlay leaves the named `praxis-forge-lab` network behind if it still has no containers; remove it explicitly when finished.
+
+### Tests
+
+Local (Python 3.12+):
+
+```bash
+cd external-client
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+ruff check src tests
+pytest -q
+```
+
+CI runs the package lint/unit suite and the two-project cross-Compose gate.
+
 ## Scenario runner
 
 The third vertical slice is a standalone HTTP-only CLI that treats Fake Booking and Fake PVS as external vendors. It does not import either simulator package.
@@ -527,7 +636,7 @@ ruff check src tests
 pytest -q
 ```
 
-The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, the contract gate, a 2-iteration soak against real Compose containers, then validates the generated evidence artifact, and the host-side restart-recovery gate.
+The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, the contract gate, a 2-iteration soak against real Compose containers, then validates the generated evidence artifact, the host-side restart-recovery gate, and the cross-Compose lab gate.
 
 ## Contract check
 
