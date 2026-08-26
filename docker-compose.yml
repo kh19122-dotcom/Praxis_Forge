@@ -62,3 +62,25 @@ services:
       FORGE_SEED: obj-002
     volumes:
       - ./docker-compose.yml:/docker-compose.yml:ro
+
+  scenario-runner:
+    profiles: ["scenario"]
+    build:
+      context: ./scenario-runner
+      target: runtime
+    environment:
+      FORGE_BOOKING_URL: http://fake-booking:8080
+      FORGE_PVS_URL: http://fake-pvs:8081
+    depends_on:
+      fake-booking:
+        condition: service_healthy
+      fake-pvs:
+        condition: service_healthy
+
+  scenario-runner-tests:
+    profiles: ["test"]
+    build:
+      context: ./scenario-runner
+      target: test
+    volumes:
+      - ./docker-compose.yml:/docker-compose.yml:ro
