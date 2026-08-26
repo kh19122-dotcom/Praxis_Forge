@@ -1,11 +1,37 @@
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
 
 import httpx
 import pytest
+
+
+def _read_http_response(sock: socket.socket) -> tuple[int, dict]:
+    sock.settimeout(5)
+    buf = bytearray()
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        buf.extend(chunk)
+    header_blob, _, rest = bytes(buf).partition(b"\r\n\r\n")
+    status_line = header_blob.split(b"\r\n", 1)[0]
+    status = int(status_line.split()[1])
+    headers: dict[bytes, bytes] = {}
+    for line in header_blob.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        headers[name.lower()] = value.strip()
+    length = int(headers.get(b"content-length", b"0") or b"0")
+    body = rest
+    while len(body) < length:
+        chunk = sock.recv(length - len(body))
+        if not chunk:
+            break
+        body += chunk
+    return status, json.loads(body.decode("utf-8"))
 
 
 def test_in_flight_upstream_request_cannot_cross_reset_barrier(
@@ -207,13 +233,12 @@ def test_partial_fault_put_cannot_configure_new_epoch(
         assert controller.is_resetting()
         assert not reset_done.is_set()
         sock.sendall(body[first_bytes:])
-        sock.settimeout(5)
-        leftover = sock.recv(4096)
+        old_status, old_body = _read_http_response(sock)
         reset_worker.join(timeout=5)
         assert not reset_worker.is_alive()
         assert late["reset_status"] == 200
-        assert leftover
-        assert b"epoch_stale" in leftover
+        assert old_status == 409
+        assert old_body["error"] == "epoch_stale"
         current = http.get(f"{admin_url}/v1/admin/faults").json()
         assert current["mode"] == "none"
         assert current["remaining"] == 0
