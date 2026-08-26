@@ -20,6 +20,10 @@ def _compose_file() -> Path:
 def test_default_compose_port_is_loopback_only() -> None:
     text = _compose_file().read_text(encoding="utf-8")
     assert "127.0.0.1:8081:8081" in text
+    assert "FORGE_STATE_PATH: /var/lib/forge/state.json" in text
+    assert "fake-pvs-state:/var/lib/forge" in text
+    assert "docker.sock" not in text
+    assert "/var/run/docker.sock" not in text
     for raw in text.splitlines():
         stripped = raw.split("#", 1)[0].strip().lstrip("-").strip().strip("\"'")
         if HOST_PORT_PUBLISH.fullmatch(stripped):

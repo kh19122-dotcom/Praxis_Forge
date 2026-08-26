@@ -40,6 +40,9 @@ def test_compose_keeps_admin_ports_loopback_and_runner_on_internal_http() -> Non
     assert "FORGE_PVS_CHAOS_URL: http://chaos-pvs:8091" in text
     assert "FORGE_BOOKING_CHAOS_ADMIN_URL: http://chaos-booking:8092" in text
     assert "FORGE_PVS_CHAOS_ADMIN_URL: http://chaos-pvs:8093" in text
+    assert "FORGE_STATE_PATH: /var/lib/forge/state.json" in text
+    assert "fake-booking-state:/var/lib/forge" in text
+    assert "fake-pvs-state:/var/lib/forge" in text
     assert "scenario-runner:" in text
     assert "scenario-runner-transport:" in text
     assert "scenario-runner-soak:" in text

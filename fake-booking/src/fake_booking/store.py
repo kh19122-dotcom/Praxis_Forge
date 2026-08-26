@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from hashlib import sha256
 from threading import Lock
+from typing import Any
 
 from fake_booking.catalog import generate_slots
 from fake_booking.ids import booking_id
 from fake_booking.models import FaultConfig, FaultState
+from fake_booking.persist import read_state, write_state
 from fake_booking.settings import Settings
+
+STATE_SCHEMA = "praxis-forge.fake-booking-state.v1"
 
 
 class Store:
@@ -20,21 +24,28 @@ class Store:
         self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
         self._seq = 0
         self._trace = 0
-        self.reset()
+        self.reset(restore=True)
 
-    def reset(self) -> None:
+    def reset(self, restore: bool = False) -> None:
         with self._lock:
-            self.slots = generate_slots(self.settings)
-            self.bookings = {}
-            self.bookings_by_key = {}
-            self.events = []
-            self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
-            self._seq = 0
-            self._trace = 0
+            self._reset_locked(restore=restore)
+
+    def _reset_locked(self, *, restore: bool) -> None:
+        self.slots = generate_slots(self.settings)
+        self.bookings = {}
+        self.bookings_by_key = {}
+        self.events = []
+        self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
+        self._seq = 0
+        self._trace = 0
+        if restore and self._restore_locked():
+            return
+        self._persist_locked()
 
     def next_trace_id(self) -> str:
         with self._lock:
             self._trace += 1
+            self._persist_locked()
             return f"tr_{self._trace:06d}"
 
     def record(self, trace_id: str, event_type: str, **details: object) -> dict:
@@ -47,6 +58,7 @@ class Store:
                 "details": details,
             }
             self.events.append(event)
+            self._persist_locked()
             return event
 
     def set_fault(self, config: FaultConfig) -> FaultState:
@@ -133,4 +145,79 @@ class Store:
             slot["booking_id"] = new_id
             self.bookings[new_id] = booking
             self.bookings_by_key[idempotency_key] = new_id
+            self._persist_locked()
             return {"kind": "created", "booking": dict(booking)}
+
+    def _persist_locked(self) -> None:
+        path = self.settings.state_path
+        if not path:
+            return
+        write_state(path, self._snapshot_locked())
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        return {
+            "schema": STATE_SCHEMA,
+            "seed": self.settings.seed,
+            "seq": self._seq,
+            "trace": self._trace,
+            "bookings": self.bookings,
+            "bookings_by_key": self.bookings_by_key,
+            "events": self.events,
+            "slot_booking_ids": {
+                slot_id: slot["booking_id"]
+                for slot_id, slot in self.slots.items()
+                if slot["booking_id"] is not None
+            },
+        }
+
+    def _restore_locked(self) -> bool:
+        path = self.settings.state_path
+        if not path:
+            return False
+        payload = read_state(path)
+        if payload is None:
+            return False
+        if payload.get("schema") != STATE_SCHEMA:
+            return False
+        if payload.get("seed") != self.settings.seed:
+            return False
+        bookings = payload.get("bookings")
+        bookings_by_key = payload.get("bookings_by_key")
+        events = payload.get("events")
+        slot_booking_ids = payload.get("slot_booking_ids")
+        seq = payload.get("seq")
+        trace = payload.get("trace")
+        if not isinstance(bookings, dict) or not isinstance(bookings_by_key, dict):
+            return False
+        if not isinstance(events, list) or not isinstance(slot_booking_ids, dict):
+            return False
+        if not isinstance(seq, int) or not isinstance(trace, int):
+            return False
+        restored_bookings = {
+            str(key): dict(value) for key, value in bookings.items() if isinstance(value, dict)
+        }
+        restored_keys = {
+            str(key): str(value)
+            for key, value in bookings_by_key.items()
+            if isinstance(value, str)
+        }
+        self.bookings = restored_bookings
+        self.bookings_by_key = restored_keys
+        self.events = [dict(event) for event in events if isinstance(event, dict)]
+        self._seq = seq
+        self._trace = trace
+        for slot_id, booking_id_value in slot_booking_ids.items():
+            slot = self.slots.get(str(slot_id))
+            if slot is None:
+                continue
+            slot["booking_id"] = None if booking_id_value is None else str(booking_id_value)
+        for booking in self.bookings.values():
+            slot_id = booking.get("slot_id")
+            booking_id_value = booking.get("id")
+            if (
+                isinstance(slot_id, str)
+                and isinstance(booking_id_value, str)
+                and slot_id in self.slots
+            ):
+                self.slots[slot_id]["booking_id"] = booking_id_value
+        return True

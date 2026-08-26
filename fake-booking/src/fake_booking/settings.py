@@ -18,7 +18,12 @@ class Settings:
     slot_hours: tuple[int, ...] = DEFAULT_SLOT_HOURS
     slot_days: int = DEFAULT_SLOT_DAYS
     origin_date: str = DEFAULT_ORIGIN_DATE
+    state_path: str | None = None
 
     @classmethod
     def from_env(cls, seed: str | None = None) -> Settings:
-        return cls(seed=seed or os.environ.get("FORGE_SEED", DEFAULT_SEED))
+        raw_path = os.environ.get("FORGE_STATE_PATH", "").strip()
+        return cls(
+            seed=seed or os.environ.get("FORGE_SEED", DEFAULT_SEED),
+            state_path=raw_path or None,
+        )

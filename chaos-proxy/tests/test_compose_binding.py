@@ -35,6 +35,8 @@ def test_host_published_chaos_and_admin_ports_are_loopback_only() -> None:
     assert "127.0.0.1:8093:8093" in text
     assert "FORGE_BOOKING_CHAOS_URL: http://chaos-booking:8090" in text
     assert "FORGE_PVS_CHAOS_URL: http://chaos-pvs:8091" in text
+    assert "docker.sock" not in text
+    assert "/var/run/docker.sock" not in text
     for raw in text.splitlines():
         stripped = raw.split("#", 1)[0].strip().lstrip("-").strip().strip("\"'")
         if HOST_PORT_PUBLISH.fullmatch(stripped):

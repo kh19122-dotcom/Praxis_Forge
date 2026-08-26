@@ -205,6 +205,87 @@ pytest -q
 
 The test suite covers patient/encounter reads, synthetic-identifier enforcement, idempotent task creation, missing-patient/validation/conflict/infrastructure failures, delayed response, and ambiguous remote-effect recovery from Forge evidence.
 
+## Durable simulator state
+
+Fake Booking and Fake PVS persist only simulator remote business state. Chaos-proxy arming and scenario-runner process memory are not part of this store.
+
+Persisted when durable mode is on:
+
+- committed bookings / tasks
+- idempotency-key mappings used to replay the same remote object
+- booking slot consumption needed for conflict semantics
+- event/evidence records used to prove a prior committed remote effect
+- seed-derived IDs and trace/event sequence counters
+
+Not persisted:
+
+- transient simulator `PUT /v1/admin/faults` arming
+- chaos-proxy fault configuration
+- Docker/Compose control state
+
+The persistence format is a local JSON file written atomically (`tmp` + `os.replace`). It is test infrastructure, not a clinical datastore.
+
+### Ephemeral vs durable
+
+Unset `FORGE_STATE_PATH` (the unit-test default) keeps the process in-memory only. Ordinary pytest runs stay isolated and do not write files.
+
+Set `FORGE_STATE_PATH` to enable durable mode. Default Compose runtime services use:
+
+| Service | Env | Volume | File |
+|---|---|---|---|
+| Fake Booking | `FORGE_STATE_PATH=/var/lib/forge/state.json` | named volume `fake-booking-state` mounted at `/var/lib/forge` | `/var/lib/forge/state.json` |
+| Fake PVS | `FORGE_STATE_PATH=/var/lib/forge/state.json` | named volume `fake-pvs-state` mounted at `/var/lib/forge` | `/var/lib/forge/state.json` |
+
+A matching `FORGE_SEED` is required to restore a file. A seed mismatch discards the file and reseeds from the catalog/corpus.
+
+Local durable example:
+
+```bash
+FORGE_SEED=obj-001 FORGE_STATE_PATH=/tmp/forge-booking.json uvicorn fake_booking.app:app --port 8080
+```
+
+Test containers and host unit tests leave `FORGE_STATE_PATH` unset.
+
+### Reset and volume lifecycle
+
+`POST /v1/admin/reset` on a simulator:
+
+- reseeds catalog/corpus from the current `FORGE_SEED`
+- clears bookings/tasks, idempotency maps, and events
+- returns fault controls to `mode=none`
+- overwrites the durable state file with that baseline when `FORGE_STATE_PATH` is set
+
+Restarting a durable container restores the last committed file. Restarting after admin reset therefore restores the seeded baseline, not the pre-reset bookings/tasks.
+
+Remove Compose volumes to discard durable files:
+
+```bash
+docker compose down --volumes
+```
+
+`docker compose restart fake-booking` / `fake-pvs` keeps the named volumes.
+
+### Restart-recovery verification
+
+The host-side gate talks to published loopback ports and uses Docker Compose from the host. It does not run inside scenario-runner, simulator, proxy, or contract-check containers and does not mount the Docker socket into those containers.
+
+```bash
+python3 scripts/restart_recovery.py
+```
+
+That script starts `fake-booking`, `fake-pvs`, `chaos-booking`, and `chaos-pvs`, then proves:
+
+- a committed booking/task survives simulator restart
+- idempotent replay after restart returns the same object
+- booking slot consumption/conflict survives restart
+- event/evidence records survive restart
+- `drop_after_upstream` + client transport failure + simulator restart is recoverable via evidence/read + same-object retry
+- `drop_before_upstream` leaves no durable remote effect
+- admin reset clears durable state back to the seeded baseline
+- armed simulator faults do not survive restart
+
+CI runs the same command.
+
 ## Chaos proxy
 
 The fourth vertical slice is a standalone HTTP transport-chaos proxy in front of Fake Booking and Fake PVS. It does not import either simulator package and does not own simulator state.
@@ -446,7 +527,7 @@ ruff check src tests
 pytest -q
 ```
 
-The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, the contract gate, and a 2-iteration soak against real Compose containers, then validates the generated evidence artifact.
+The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, the contract gate, a 2-iteration soak against real Compose containers, then validates the generated evidence artifact, and the host-side restart-recovery gate.
 
 ## Contract check
 

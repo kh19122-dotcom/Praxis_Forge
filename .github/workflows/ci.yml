@@ -164,3 +164,10 @@ jobs:
                       raise SystemExit(scenario)
           print("soak evidence ok")
           PY
+
+  restart-recovery-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run host-side restart-recovery gate against Compose containers
+        run: python3 scripts/restart_recovery.py
