@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from chaos_proxy.controller import FaultController
+from chaos_proxy.controller import EpochStale, FaultController
 from chaos_proxy.httputil import (
     header_map,
     idempotency_key,
@@ -86,11 +86,11 @@ class ProxyHandler(_BaseHandler):
         path = request_path(self)
         method = self.command.upper()
         key = idempotency_key(self)
-        body = read_body(self)
-        headers = header_map(self)
-        target = request_target(self)
         epoch = controller.begin()
         try:
+            body = read_body(self)
+            headers = header_map(self)
+            target = request_target(self)
             controller.record(
                 "request_received",
                 epoch=epoch,
@@ -196,15 +196,32 @@ class AdminHandler(_BaseHandler):
             send_json(self, 200, controller.snapshot().to_dict())
             return
         if path == "/v1/admin/faults" and method == "PUT":
-            payload = _read_json(self)
-            if payload is None:
-                return
+            epoch = controller.begin()
             try:
-                fault = controller.configure(payload)
-            except (TypeError, ValueError) as exc:
-                send_json(self, 400, {"error": "invalid_fault", "message": str(exc)})
-                return
-            send_json(self, 200, fault.to_dict())
+                payload = _read_json(self)
+                if payload is None:
+                    return
+                try:
+                    fault = controller.configure(payload, epoch=epoch)
+                except EpochStale:
+                    send_json(
+                        self,
+                        409,
+                        {
+                            "error": "epoch_stale",
+                            "message": (
+                                "Request began before a completed reset and cannot "
+                                "mutate the new epoch."
+                            ),
+                        },
+                    )
+                    return
+                except (TypeError, ValueError) as exc:
+                    send_json(self, 400, {"error": "invalid_fault", "message": str(exc)})
+                    return
+                send_json(self, 200, fault.to_dict())
+            finally:
+                controller.finish(epoch)
             return
         if path == "/v1/admin/events" and method == "GET":
             send_json(self, 200, {"service": settings.service_name, "events": controller.events()})

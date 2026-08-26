@@ -65,6 +65,26 @@ class Store:
         with self._lock:
             return epoch == self._epoch
 
+    def in_flight_total(self) -> int:
+        with self._lock:
+            return sum(self._in_flight.values())
+
+    def is_resetting(self) -> bool:
+        with self._lock:
+            return self._resetting
+
+    def admit(self) -> int:
+        with self._cond:
+            while self._resetting:
+                self._cond.wait()
+            epoch = self._epoch
+            self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
+            return epoch
+
+    def release(self, epoch: int) -> None:
+        with self._cond:
+            self._release_locked(epoch)
+
     def reset(self, restore: bool = False) -> None:
         with self._cond:
             self._resetting = True
@@ -88,19 +108,30 @@ class Store:
             return
         self._persist_locked()
 
-    def begin_request(self, event_type: str, **details: object) -> tuple[int, str]:
+    def begin_request(
+        self,
+        event_type: str,
+        *,
+        epoch: int | None = None,
+        **details: object,
+    ) -> tuple[int, str]:
         with self._cond:
-            while self._resetting:
-                self._cond.wait()
-            epoch = self._epoch
-            self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
+            owns_lifetime = epoch is None
+            if owns_lifetime:
+                while self._resetting:
+                    self._cond.wait()
+                epoch = self._epoch
+                self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
+            elif epoch != self._epoch:
+                raise EpochStale()
             try:
                 self._trace += 1
                 trace_id = _format_trace_id(epoch, self._trace)
                 self._append_event_locked(trace_id, event_type, **details)
                 self._persist_locked()
             except Exception:
-                self._release_locked(epoch)
+                if owns_lifetime:
+                    self._release_locked(epoch)
                 raise
             return epoch, trace_id
 
@@ -452,37 +483,39 @@ def _validate_booking_snapshot(
     if rebuilt_slots != slot_booking_ids:
         raise RestoreError("slot_booking_ids does not match bookings")
 
-    events = _validate_events(events_raw, seq, trace)
+    events = _validate_events(events_raw, seq, trace, epoch)
     _validate_commit_evidence(bookings, events)
     return bookings, bookings_by_key, events, seq, trace, slot_booking_ids, epoch
 
 
-def _validate_events(events_raw: list[object], seq: int, trace: int) -> list[dict]:
+def _validate_events(events_raw: list[object], seq: int, trace: int, epoch: int) -> list[dict]:
     events: list[dict] = []
-    seen_seq: set[int] = set()
-    max_seq = 0
     max_local_trace = 0
-    for item in events_raw:
+    for index, item in enumerate(events_raw):
         if not isinstance(item, dict):
             raise RestoreError("event entry is not an object")
         try:
             event = Event.model_validate(item)
         except ValidationError as exc:
             raise RestoreError("malformed event") from exc
-        if event.seq <= 0 or event.seq in seen_seq:
-            raise RestoreError("event sequence is invalid")
+        expected_seq = index + 1
+        if event.seq != expected_seq:
+            raise RestoreError("event sequence is not the generated contiguous order")
         parsed = _parse_trace_id(event.trace_id)
         if parsed is None:
             raise RestoreError("event trace_id is invalid")
+        event_epoch, local_trace = parsed
+        if event_epoch != epoch:
+            raise RestoreError("event trace epoch does not match snapshot epoch")
+        if local_trace < 1:
+            raise RestoreError("event local trace is not allocated")
         if not event.type or not isinstance(event.type, str):
             raise RestoreError("event type is invalid")
         if not isinstance(event.details, dict):
             raise RestoreError("event details must be an object")
-        seen_seq.add(event.seq)
-        max_seq = max(max_seq, event.seq)
-        max_local_trace = max(max_local_trace, parsed[1])
+        max_local_trace = max(max_local_trace, local_trace)
         events.append(event.model_dump())
-    if max_seq > seq or max_local_trace > trace:
+    if seq != len(events) or max_local_trace > trace:
         raise RestoreError("counters do not dominate restored events")
     return events
 
@@ -492,9 +525,19 @@ def _validate_commit_evidence(bookings: dict[str, dict], events: list[dict]) -> 
     for event in events:
         if event["type"] != "booking_committed":
             continue
-        booking_id_value = event["details"].get("booking_id")
+        details = event["details"]
+        booking_id_value = details.get("booking_id")
         if not isinstance(booking_id_value, str) or booking_id_value not in bookings:
             raise RestoreError("committed evidence references a missing booking")
+        booking = bookings[booking_id_value]
+        if details.get("committed") is not True:
+            raise RestoreError("committed evidence is not marked committed")
+        if details.get("idempotency_key") != booking["idempotency_key"]:
+            raise RestoreError("committed evidence idempotency key does not match booking")
+        if details.get("slot_id") != booking["slot_id"]:
+            raise RestoreError("committed evidence slot does not match booking")
+        if booking_id_value in committed:
+            raise RestoreError("duplicate committed evidence")
         committed.add(booking_id_value)
     missing = set(bookings) - committed
     if missing:

@@ -163,3 +163,203 @@ def test_absent_state_file_initializes_baseline(tmp_path: Path) -> None:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     assert payload["tasks"] == {}
     assert payload["seed"] == "obj-002"
+
+
+def _committed_event(payload: dict) -> dict:
+    return next(event for event in payload["events"] if event["type"] == "task_committed")
+
+
+def _assert_restore_fails(path: str, original: str, match: str) -> None:
+    with pytest.raises(RestoreError, match=match):
+        Store(Settings(seed="obj-002", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == original
+
+
+def test_trace_epoch_mismatch_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("epoch-key-0001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        for event in payload["events"]:
+            event["trace_id"] = "tr_000002_000001"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "event trace epoch")
+
+
+def test_zero_local_trace_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("trace-zero-0001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        epoch = payload["epoch"]
+        for event in payload["events"]:
+            event["trace_id"] = f"tr_{epoch:06d}_000000"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "local trace")
+
+
+def test_sequence_gap_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("seq-gap-000001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        payload["seq"] = 3
+        for event in payload["events"]:
+            if event["seq"] == 1:
+                event["seq"] = 3
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "contiguous order")
+
+
+def test_sequence_out_of_order_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    epoch, trace_id = first.begin_request(
+        "task_requested",
+        idempotency_key="seq-order-0001",
+        patient_id="synth-ada",
+        title="synth-task",
+        priority="normal",
+    )
+    first.finish_request(epoch)
+    first.create_task(
+        "seq-order-0001",
+        "synth-ada",
+        "synth-task",
+        "normal",
+        epoch=epoch,
+        trace_id=trace_id,
+    )
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload["events"] = list(reversed(payload["events"]))
+    original = json.dumps(payload)
+    Path(path).write_text(original, encoding="utf-8")
+    _assert_restore_fails(path, original, "contiguous order")
+
+
+def test_duplicate_sequence_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    epoch, trace_id = first.begin_request(
+        "task_requested",
+        idempotency_key="seq-dup-000001",
+        patient_id="synth-ada",
+        title="synth-task",
+        priority="normal",
+    )
+    first.finish_request(epoch)
+    first.create_task(
+        "seq-dup-000001",
+        "synth-ada",
+        "synth-task",
+        "normal",
+        epoch=epoch,
+        trace_id=trace_id,
+    )
+
+    def mutate(payload: dict) -> None:
+        payload["events"][1]["seq"] = payload["events"][0]["seq"]
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "contiguous order")
+
+
+def test_committed_false_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("commit-false-01", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        _committed_event(payload)["details"]["committed"] = False
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "not marked committed")
+
+
+def test_wrong_committed_idempotency_key_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("commit-key-0001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        _committed_event(payload)["details"]["idempotency_key"] = "wrong-key-0001"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "idempotency key")
+
+
+def test_wrong_committed_patient_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("commit-patient-1", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        _committed_event(payload)["details"]["patient_id"] = "synth-ben"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "patient")
+
+
+def test_duplicate_committed_event_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("commit-dup-0001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        extra = dict(_committed_event(payload))
+        extra["seq"] = payload["seq"] + 1
+        extra["details"] = dict(extra["details"])
+        payload["events"].append(extra)
+        payload["seq"] = extra["seq"]
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "duplicate committed evidence")
+
+
+def test_object_missing_committed_evidence_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("missing-ev-0001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        payload["events"] = [
+            event for event in payload["events"] if event["type"] != "task_committed"
+        ]
+        payload["seq"] = len(payload["events"])
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "without matching committed evidence")
+
+
+def test_committed_evidence_missing_object_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("ghost-ev-00001", "synth-ada", "synth-task", "normal")
+    task_id = created["task"]["id"]
+
+    def mutate(payload: dict) -> None:
+        payload["tasks"].pop(task_id)
+        payload["tasks_by_key"] = {}
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "missing task")
+
+
+def test_restore_reset_does_not_reuse_issued_trace(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("trace-keep-0001", "synth-ada", "synth-task", "normal")
+    issued = {event["trace_id"] for event in first.events}
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    restored.reset()
+    created = restored.create_task("trace-new-00001", "synth-ada", "synth-task", "normal")
+    assert created["kind"] == "created"
+    after = {event["trace_id"] for event in restored.events}
+    assert after
+    assert issued.isdisjoint(after)

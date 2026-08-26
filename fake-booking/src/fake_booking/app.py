@@ -39,6 +39,47 @@ app = FastAPI(
 )
 
 
+class RequestAdmissionMiddleware:
+    """Enroll mutating requests before downstream body consumption."""
+
+    def __init__(self, app, *, store: Store, routes: frozenset[tuple[str, str]]) -> None:
+        self.app = app
+        self.store = store
+        self.routes = routes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method")
+        path = scope.get("path")
+        if (method, path) not in self.routes:
+            await self.app(scope, receive, send)
+            return
+        epoch = await asyncio.to_thread(self.store.admit)
+        state = scope.setdefault("state", {})
+        if isinstance(state, dict):
+            state["admission_epoch"] = epoch
+        else:
+            state.admission_epoch = epoch
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.store.release(epoch)
+
+
+app.add_middleware(
+    RequestAdmissionMiddleware,
+    store=store,
+    routes=frozenset(
+        {
+            ("POST", "/v1/bookings"),
+            ("PUT", "/v1/admin/faults"),
+        }
+    ),
+)
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
     detail = exc.detail
@@ -140,97 +181,96 @@ def list_slots(
 
 @app.post("/v1/bookings", response_model=Booking, status_code=201, tags=["booking"])
 async def create_booking(
+    request: Request,
     body: BookingCreate,
     response: Response,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=128),
 ) -> Booking:
-    epoch, trace_id = store.begin_request(
-        "booking_requested",
-        idempotency_key=idempotency_key,
-        slot_id=body.slot_id,
-        patient_ref=body.patient_ref,
-    )
     try:
-        try:
-            fault = store.consume_fault(idempotency_key, epoch=epoch)
-            if fault.mode == "fail_before_commit":
-                store.record(trace_id, "fault_injected", epoch=epoch, mode=fault.mode)
-                store.record(trace_id, "commit_skipped", epoch=epoch, reason="fail_before_commit")
-                _error(
-                    503,
-                    "fail_before_commit",
-                    "Remote commit was not attempted.",
-                    trace_id,
-                    committed=False,
-                )
-            if fault.mode in {"delay", "ambiguous"} and fault.delay_ms:
-                await asyncio.sleep(fault.delay_ms / 1000)
-                store.record(
-                    trace_id,
-                    "response_delayed",
-                    epoch=epoch,
-                    delay_ms=fault.delay_ms,
-                    mode=fault.mode,
-                )
-            result = store.create_booking(
-                idempotency_key,
-                body.slot_id,
-                body.patient_ref,
+        epoch, trace_id = store.begin_request(
+            "booking_requested",
+            epoch=request.state.admission_epoch,
+            idempotency_key=idempotency_key,
+            slot_id=body.slot_id,
+            patient_ref=body.patient_ref,
+        )
+        fault = store.consume_fault(idempotency_key, epoch=epoch)
+        if fault.mode == "fail_before_commit":
+            store.record(trace_id, "fault_injected", epoch=epoch, mode=fault.mode)
+            store.record(trace_id, "commit_skipped", epoch=epoch, reason="fail_before_commit")
+            _error(
+                503,
+                "fail_before_commit",
+                "Remote commit was not attempted.",
+                trace_id,
+                committed=False,
+            )
+        if fault.mode in {"delay", "ambiguous"} and fault.delay_ms:
+            await asyncio.sleep(fault.delay_ms / 1000)
+            store.record(
+                trace_id,
+                "response_delayed",
                 epoch=epoch,
-                trace_id=trace_id,
+                delay_ms=fault.delay_ms,
+                mode=fault.mode,
+            )
+        result = store.create_booking(
+            idempotency_key,
+            body.slot_id,
+            body.patient_ref,
+            epoch=epoch,
+            trace_id=trace_id,
+        )
+    except EpochStale as stale:
+        _stale(stale.trace_id)
+
+    kind = result["kind"]
+    if kind == "slot_not_found":
+        _error(404, "slot_not_found", "Unknown slot.", trace_id, slot_id=body.slot_id)
+    if kind == "slot_conflict":
+        _error(
+            409,
+            "slot_conflict",
+            "Slot is already booked.",
+            trace_id,
+            existing_booking_id=result["existing_booking_id"],
+            committed=False,
+        )
+    if kind == "idempotency_conflict":
+        _error(
+            409,
+            "idempotency_conflict",
+            "Idempotency key was reused with a different request body.",
+            trace_id,
+            booking_id=result["booking"]["id"],
+            committed=False,
+        )
+
+    booking = result["booking"]
+    if not store.epoch_is_current(epoch):
+        _stale(trace_id)
+    if fault.mode == "ambiguous":
+        try:
+            store.record(
+                trace_id,
+                "response_suppressed",
+                epoch=epoch,
+                reason="ambiguous_outcome",
+                booking_id=booking["id"],
+                committed=True,
             )
         except EpochStale as stale:
             _stale(stale.trace_id)
-
-        kind = result["kind"]
-        if kind == "slot_not_found":
-            _error(404, "slot_not_found", "Unknown slot.", trace_id, slot_id=body.slot_id)
-        if kind == "slot_conflict":
-            _error(
-                409,
-                "slot_conflict",
-                "Slot is already booked.",
-                trace_id,
-                existing_booking_id=result["existing_booking_id"],
-                committed=False,
-            )
-        if kind == "idempotency_conflict":
-            _error(
-                409,
-                "idempotency_conflict",
-                "Idempotency key was reused with a different request body.",
-                trace_id,
-                booking_id=result["booking"]["id"],
-                committed=False,
-            )
-
-        booking = result["booking"]
-        if not store.epoch_is_current(epoch):
-            _stale(trace_id)
-        if fault.mode == "ambiguous":
-            try:
-                store.record(
-                    trace_id,
-                    "response_suppressed",
-                    epoch=epoch,
-                    reason="ambiguous_outcome",
-                    booking_id=booking["id"],
-                    committed=True,
-                )
-            except EpochStale as stale:
-                _stale(stale.trace_id)
-            _error(
-                504,
-                "ambiguous_outcome",
-                "Remote effect may have committed; client must inspect Forge evidence.",
-                trace_id,
-                committed=None,
-            )
-        if kind == "replay":
-            response.status_code = 200
-        return _public_booking(booking)
-    finally:
-        store.finish_request(epoch)
+        _error(
+            504,
+            "ambiguous_outcome",
+            "Remote effect may have committed; client must inspect Forge evidence.",
+            trace_id,
+            committed=None,
+        )
+    if kind == "replay":
+        response.status_code = 200
+    return _public_booking(booking)
 
 
 @app.get("/v1/bookings/{booking_id}", response_model=Booking, tags=["booking"])
@@ -258,8 +298,8 @@ def get_fault() -> FaultState:
 
 
 @app.put("/v1/admin/faults", response_model=FaultState, tags=["admin"])
-def put_fault(config: FaultConfig) -> FaultState:
-    epoch = store.epoch()
+def put_fault(request: Request, config: FaultConfig) -> FaultState:
+    epoch = request.state.admission_epoch
     try:
         fault = store.set_fault(config, epoch=epoch)
         store.record(
