@@ -33,6 +33,11 @@ class FaultController:
         self._fault = Fault()
         self._events: list[dict[str, Any]] = []
         self._seq = 0
+        self._epoch = 0
+
+    def begin(self) -> int:
+        with self._lock:
+            return self._epoch
 
     def snapshot(self) -> Fault:
         with self._lock:
@@ -47,6 +52,7 @@ class FaultController:
 
     def reset(self) -> Fault:
         with self._lock:
+            self._epoch += 1
             self._fault = Fault()
             self._events = []
             self._seq = 0
@@ -93,9 +99,16 @@ class FaultController:
             return fault
 
     def consume(
-        self, method: str, path: str, idempotency_key: str | None
+        self,
+        method: str,
+        path: str,
+        idempotency_key: str | None,
+        *,
+        epoch: int | None = None,
     ) -> Fault | None:
         with self._lock:
+            if epoch is not None and epoch != self._epoch:
+                return None
             current = self._fault
             if current.mode == "none" or current.remaining <= 0:
                 return None
@@ -127,8 +140,10 @@ class FaultController:
             )
             return current
 
-    def record(self, event_type: str, **details: object) -> None:
+    def record(self, event_type: str, *, epoch: int | None = None, **details: object) -> None:
         with self._lock:
+            if epoch is not None and epoch != self._epoch:
+                return
             self._record_locked(event_type, **details)
 
     def _record_locked(self, event_type: str, **details: object) -> None:

@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Any
 
 
+class RestoreError(ValueError):
+    """Durable state exists but cannot be installed. The original file is left unchanged."""
+
+
+class PersistenceCrash(RuntimeError):
+    """Test-only simulated crash at a persistence boundary."""
+
+
 def write_state(path: str, payload: dict[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -20,10 +28,17 @@ def write_state(path: str, payload: dict[str, Any]) -> None:
 
 def read_state(path: str) -> dict[str, Any] | None:
     target = Path(path)
+    if not target.exists():
+        return None
     if not target.is_file():
-        return None
+        raise RestoreError("state path exists but is not a readable file")
     try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
+        raw = target.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except OSError as exc:
+        raise RestoreError("state file is unreadable") from exc
+    except json.JSONDecodeError as exc:
+        raise RestoreError("state file is truncated or not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RestoreError("state file must contain a JSON object")
+    return payload

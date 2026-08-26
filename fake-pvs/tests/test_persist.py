@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
+
 from fake_pvs.models import FaultConfig
+from fake_pvs.persist import RestoreError
 from fake_pvs.settings import Settings
 from fake_pvs.store import Store
+
+
+def _corrupt(path: str, mutator) -> str:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    mutator(payload)
+    text = json.dumps(payload)
+    Path(path).write_text(text, encoding="utf-8")
+    return text
 
 
 def test_from_env_state_path(monkeypatch, tmp_path: Path) -> None:
@@ -29,7 +41,6 @@ def test_durable_task_survives_new_store_instance(tmp_path: Path) -> None:
     first = Store(Settings(seed="obj-002", state_path=path))
     created = first.create_task("persist-key-0001", "synth-ada", "synth-chart-review", "normal")
     task_id = created["task"]["id"]
-    first.record("tr_000001", "task_committed", task_id=task_id, committed=True)
     first.set_fault(FaultConfig(mode="fail_before_commit", remaining=3))
     assert first.fault.mode == "fail_before_commit"
 
@@ -64,10 +75,91 @@ def test_admin_reset_clears_durable_pvs_state(tmp_path: Path) -> None:
     assert list(second.patients) == list(first.patients)
 
 
-def test_seed_mismatch_does_not_restore_pvs_state(tmp_path: Path) -> None:
+def test_seed_mismatch_fails_closed_and_preserves_file(tmp_path: Path) -> None:
     path = str(tmp_path / "pvs.json")
     first = Store(Settings(seed="obj-002", state_path=path))
     created = first.create_task("seed-key-0001", "synth-ada", "synth-task", "normal")
-    other = Store(Settings(seed="obj-009", state_path=path))
-    assert other.get_task(created["task"]["id"]) is None
-    assert other.events == []
+    original = Path(path).read_bytes()
+    with pytest.raises(RestoreError, match="seed mismatch"):
+        Store(Settings(seed="obj-009", state_path=path))
+    assert Path(path).read_bytes() == original
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.get_task(created["task"]["id"]) is not None
+
+
+def test_truncated_json_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "pvs.json"
+    store = Store(Settings(seed="obj-002", state_path=str(path)))
+    store.create_task("trunc-key-0001", "synth-ada", "synth-task", "normal")
+    original = b'{"schema":"praxis-forge.fake-pvs-state.v1","seed":"obj-002"'
+    path.write_bytes(original)
+    with pytest.raises(RestoreError, match="truncated|not valid JSON"):
+        Store(Settings(seed="obj-002", state_path=str(path)))
+    assert path.read_bytes() == original
+
+
+def test_non_object_json_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "pvs.json"
+    original = b"[1, 2, 3]"
+    path.write_bytes(original)
+    with pytest.raises(RestoreError, match="JSON object"):
+        Store(Settings(seed="obj-002", state_path=str(path)))
+    assert path.read_bytes() == original
+
+
+def test_dangling_idempotency_map_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("map-key-0001", "synth-ada", "synth-task", "normal")
+    original = _corrupt(
+        path,
+        lambda payload: payload["tasks_by_key"].update({"broken-key-0001": "tsk_missing"}),
+    )
+    with pytest.raises(RestoreError, match="dangling"):
+        Store(Settings(seed="obj-002", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == original
+
+
+def test_malformed_event_counter_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("event-key-0001", "synth-ada", "synth-task", "normal")
+    original = _corrupt(path, lambda payload: payload.update({"seq": 0, "trace": 0}))
+    with pytest.raises(RestoreError, match="counters"):
+        Store(Settings(seed="obj-002", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == original
+
+
+def test_unsupported_schema_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("schema-key-0001", "synth-ada", "synth-task", "normal")
+    original = _corrupt(path, lambda payload: payload.update({"schema": "not-a-schema"}))
+    with pytest.raises(RestoreError, match="unsupported state schema"):
+        Store(Settings(seed="obj-002", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == original
+
+
+def test_invalid_stored_task_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("body-key-0001", "synth-ada", "synth-task", "normal")
+    task_id = created["task"]["id"]
+
+    def mutate(payload: dict) -> None:
+        payload["tasks"][task_id]["title"] = "Call patient"
+
+    original = _corrupt(path, mutate)
+    with pytest.raises(RestoreError, match="invalid stored task"):
+        Store(Settings(seed="obj-002", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == original
+
+
+def test_absent_state_file_initializes_baseline(tmp_path: Path) -> None:
+    path = str(tmp_path / "missing" / "pvs.json")
+    store = Store(Settings(seed="obj-002", state_path=path))
+    assert store.tasks == {}
+    assert Path(path).is_file()
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["tasks"] == {}
+    assert payload["seed"] == "obj-002"

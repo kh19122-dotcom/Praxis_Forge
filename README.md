@@ -236,7 +236,7 @@ Set `FORGE_STATE_PATH` to enable durable mode. Default Compose runtime services 
 | Fake Booking | `FORGE_STATE_PATH=/var/lib/forge/state.json` | named volume `fake-booking-state` mounted at `/var/lib/forge` | `/var/lib/forge/state.json` |
 | Fake PVS | `FORGE_STATE_PATH=/var/lib/forge/state.json` | named volume `fake-pvs-state` mounted at `/var/lib/forge` | `/var/lib/forge/state.json` |
 
-A matching `FORGE_SEED` is required to restore a file. A seed mismatch discards the file and reseeds from the catalog/corpus.
+A matching `FORGE_SEED` and `praxis-forge.fake-*-state.v1` schema are required to restore a file. Only an absent state file initializes a deterministic baseline. Malformed, truncated, non-object, schema-mismatched, seed-mismatched, or invariant-inconsistent state fails startup/readiness and leaves the original file unchanged.
 
 Local durable example:
 
@@ -248,12 +248,16 @@ Test containers and host unit tests leave `FORGE_STATE_PATH` unset.
 
 ### Reset and volume lifecycle
 
-`POST /v1/admin/reset` on a simulator:
+`POST /v1/admin/reset` on a simulator or chaos-proxy is an epoch barrier:
 
+- invalidates every in-flight mutating operation that began before reset
+- waits for those operations to finish or deterministically fail closed (`409 epoch_stale` on simulators; dropped proxy evidence/fault consumption)
 - reseeds catalog/corpus from the current `FORGE_SEED`
-- clears bookings/tasks, idempotency maps, and events
-- returns fault controls to `mode=none`
+- clears bookings/tasks, idempotency maps, events, and faults
+- starts a new trace/event sequence so pre-reset and post-reset identities cannot collide
 - overwrites the durable state file with that baseline when `FORGE_STATE_PATH` is set
+
+A successful business commit writes the remote object, idempotency mapping, slot consumption, and matching `*_committed` evidence in one Store snapshot. A crash at that persistence boundary restores either no effect or effect-plus-evidence, never effect without committed evidence.
 
 Restarting a durable container restores the last committed file. Restarting after admin reset therefore restores the seeded baseline, not the pre-reset bookings/tasks.
 
@@ -271,6 +275,7 @@ The host-side gate talks to published loopback ports and uses Docker Compose fro
 
 ```bash
 python3 scripts/restart_recovery.py
+python3 scripts/crash_consistency.py
 ```
 
 That script starts `fake-booking`, `fake-pvs`, `chaos-booking`, and `chaos-pvs`, then proves:
@@ -284,7 +289,10 @@ That script starts `fake-booking`, `fake-pvs`, `chaos-booking`, and `chaos-pvs`,
 - admin reset clears durable state back to the seeded baseline
 - armed simulator faults do not survive restart
 
-CI runs the same command.
+`python3 scripts/crash_consistency.py` is a failpoint gate: it crashes Fake Booking and Fake PVS inside `create_*` after the in-memory mutation and before the atomic snapshot write, then restores from the same file. The restored service must not contain the remote object, slot/task side effect, or `*_committed` evidence.
+
+CI runs both commands.
+
 
 ## Chaos proxy
 
@@ -636,7 +644,7 @@ ruff check src tests
 pytest -q
 ```
 
-The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, the contract gate, a 2-iteration soak against real Compose containers, then validates the generated evidence artifact, the host-side restart-recovery gate, and the cross-Compose lab gate.
+The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, the contract gate, a 2-iteration soak against real Compose containers, then validates the generated evidence artifact, the host-side restart-recovery gate, the crash-consistency failpoint gate, and the cross-Compose lab gate.
 
 ## Contract check
 

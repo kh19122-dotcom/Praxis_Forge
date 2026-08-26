@@ -89,18 +89,21 @@ class ProxyHandler(_BaseHandler):
         body = read_body(self)
         headers = header_map(self)
         target = request_target(self)
+        epoch = controller.begin()
         controller.record(
             "request_received",
+            epoch=epoch,
             method=method,
             path=path,
             idempotency_key=key,
         )
         fault = None
         if not (method == "GET" and path == "/healthz"):
-            fault = controller.consume(method, path, key)
+            fault = controller.consume(method, path, key, epoch=epoch)
         if fault and fault.mode == "drop_before_upstream":
             controller.record(
                 "dropped_before_upstream",
+                epoch=epoch,
                 method=method,
                 path=path,
                 idempotency_key=key,
@@ -115,6 +118,7 @@ class ProxyHandler(_BaseHandler):
         except httpx.HTTPError as exc:
             controller.record(
                 "upstream_error",
+                epoch=epoch,
                 method=method,
                 path=path,
                 error=f"{type(exc).__name__}: {exc}",
@@ -131,6 +135,7 @@ class ProxyHandler(_BaseHandler):
             return
         controller.record(
             "upstream_completed",
+            epoch=epoch,
             method=method,
             path=path,
             idempotency_key=key,
@@ -139,6 +144,7 @@ class ProxyHandler(_BaseHandler):
         if fault and fault.mode == "drop_after_upstream":
             controller.record(
                 "dropped_after_upstream",
+                epoch=epoch,
                 method=method,
                 path=path,
                 idempotency_key=key,
@@ -152,6 +158,7 @@ class ProxyHandler(_BaseHandler):
                 time.sleep(delay_ms / 1000)
             controller.record(
                 "response_delayed",
+                epoch=epoch,
                 method=method,
                 path=path,
                 delay_ms=delay_ms,
