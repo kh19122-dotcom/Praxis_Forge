@@ -1,0 +1,33 @@
+# Opt-in cross-Compose lab integration overlay.
+# Does not change default loopback-only host publishes in docker-compose.yml.
+#
+# Trust boundary: praxis-forge-lab is a simulation-only private Docker bridge
+# on a single host. It is not a production, LAN, or Internet exposure model.
+# Peers on this network can reach chaos data-plane and chaos admin ports.
+# Fake Booking and Fake PVS stay off this network so the intended vendor path
+# is chaos-booking / chaos-pvs.
+#
+# Start (creates/uses the stable named bridge):
+#   docker compose -f docker-compose.yml -f docker-compose.lab.yml up --build -d \
+#     fake-booking fake-pvs chaos-booking chaos-pvs
+
+networks:
+  praxis-forge-lab:
+    name: praxis-forge-lab
+    driver: bridge
+
+services:
+  chaos-booking:
+    networks:
+      default: {}
+      praxis-forge-lab:
+        aliases:
+          - chaos-booking
+          - forge-booking
+  chaos-pvs:
+    networks:
+      default: {}
+      praxis-forge-lab:
+        aliases:
+          - chaos-pvs
+          - forge-pvs

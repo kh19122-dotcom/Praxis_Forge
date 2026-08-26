@@ -90,6 +90,23 @@ jobs:
       - name: Test
         run: pytest -q
 
+  external-client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: external-client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests
+      - name: Test
+        run: pytest -q
+
   contract-suite:
     runs-on: ubuntu-latest
     steps:
@@ -171,3 +188,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run host-side restart-recovery gate against Compose containers
         run: python3 scripts/restart_recovery.py
+
+  cross-compose-lab-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run cross-Compose lab gate with two project names
+        run: python3 scripts/cross_compose_lab.py
