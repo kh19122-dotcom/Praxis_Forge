@@ -98,3 +98,22 @@ def test_pre_reset_trace_id_is_never_reused() -> None:
         after = {event["trace_id"] for event in client.get("/v1/admin/events").json()["events"]}
         assert after
         assert before.isdisjoint(after)
+
+
+def test_admit_owns_in_flight_without_double_counting() -> None:
+    store.settings = Settings(seed="obj-002", state_path=None)
+    store.reset()
+    epoch = store.admit()
+    assert store.in_flight_total() == 1
+    begun, _trace = store.begin_request(
+        "task_requested",
+        epoch=epoch,
+        idempotency_key="admit-owner-pvs",
+        patient_id="synth-ada",
+        title="synth-task",
+        priority="normal",
+    )
+    assert begun == epoch
+    assert store.in_flight_total() == 1
+    store.release(epoch)
+    assert store.in_flight_total() == 0

@@ -86,11 +86,11 @@ class ProxyHandler(_BaseHandler):
         path = request_path(self)
         method = self.command.upper()
         key = idempotency_key(self)
-        body = read_body(self)
-        headers = header_map(self)
-        target = request_target(self)
         epoch = controller.begin()
         try:
+            body = read_body(self)
+            headers = header_map(self)
+            target = request_target(self)
             controller.record(
                 "request_received",
                 epoch=epoch,

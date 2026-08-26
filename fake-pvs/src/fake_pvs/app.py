@@ -43,6 +43,37 @@ app = FastAPI(
 )
 
 
+class DataPlaneAdmissionMiddleware:
+    """Enroll POST /v1/tasks before downstream body consumption."""
+
+    def __init__(self, app, *, store: Store, path: str) -> None:
+        self.app = app
+        self.store = store
+        self.path = path
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != self.path
+        ):
+            await self.app(scope, receive, send)
+            return
+        epoch = self.store.admit()
+        state = scope.setdefault("state", {})
+        if isinstance(state, dict):
+            state["admission_epoch"] = epoch
+        else:
+            state.admission_epoch = epoch
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.store.release(epoch)
+
+
+app.add_middleware(DataPlaneAdmissionMiddleware, store=store, path="/v1/tasks")
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
     detail = exc.detail
@@ -194,96 +225,95 @@ def get_encounter(encounter_id: str) -> Encounter:
 
 @app.post("/v1/tasks", response_model=Task, status_code=201, tags=["tasks"])
 async def create_task(
+    request: Request,
     body: TaskCreate,
     response: Response,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=128),
 ) -> Task:
-    epoch, trace_id = store.begin_request(
-        "task_requested",
-        idempotency_key=idempotency_key,
-        patient_id=body.patient_id,
-        title=body.title,
-        priority=body.priority,
-    )
     try:
-        try:
-            fault = store.consume_fault(idempotency_key, epoch=epoch)
-            if fault.mode == "fail_before_commit":
-                store.record(trace_id, "fault_injected", epoch=epoch, mode=fault.mode)
-                store.record(trace_id, "commit_skipped", epoch=epoch, reason="fail_before_commit")
-                _error(
-                    503,
-                    "fail_before_commit",
-                    "Remote commit was not attempted.",
-                    trace_id,
-                    committed=False,
-                )
-            if fault.mode in {"delay", "ambiguous"} and fault.delay_ms:
-                await asyncio.sleep(fault.delay_ms / 1000)
-                store.record(
-                    trace_id,
-                    "response_delayed",
-                    epoch=epoch,
-                    delay_ms=fault.delay_ms,
-                    mode=fault.mode,
-                )
-            result = store.create_task(
-                idempotency_key,
-                body.patient_id,
-                body.title,
-                body.priority,
+        epoch, trace_id = store.begin_request(
+            "task_requested",
+            epoch=request.state.admission_epoch,
+            idempotency_key=idempotency_key,
+            patient_id=body.patient_id,
+            title=body.title,
+            priority=body.priority,
+        )
+        fault = store.consume_fault(idempotency_key, epoch=epoch)
+        if fault.mode == "fail_before_commit":
+            store.record(trace_id, "fault_injected", epoch=epoch, mode=fault.mode)
+            store.record(trace_id, "commit_skipped", epoch=epoch, reason="fail_before_commit")
+            _error(
+                503,
+                "fail_before_commit",
+                "Remote commit was not attempted.",
+                trace_id,
+                committed=False,
+            )
+        if fault.mode in {"delay", "ambiguous"} and fault.delay_ms:
+            await asyncio.sleep(fault.delay_ms / 1000)
+            store.record(
+                trace_id,
+                "response_delayed",
                 epoch=epoch,
-                trace_id=trace_id,
+                delay_ms=fault.delay_ms,
+                mode=fault.mode,
+            )
+        result = store.create_task(
+            idempotency_key,
+            body.patient_id,
+            body.title,
+            body.priority,
+            epoch=epoch,
+            trace_id=trace_id,
+        )
+    except EpochStale as stale:
+        _stale(stale.trace_id)
+
+    kind = result["kind"]
+    if kind == "patient_not_found":
+        _error(
+            404,
+            "patient_not_found",
+            "Unknown patient.",
+            trace_id,
+            patient_id=body.patient_id,
+        )
+    if kind == "idempotency_conflict":
+        _error(
+            409,
+            "idempotency_conflict",
+            "Idempotency key was reused with a different request body.",
+            trace_id,
+            task_id=result["task"]["id"],
+            committed=False,
+        )
+
+    task = result["task"]
+    if not store.epoch_is_current(epoch):
+        _stale(trace_id)
+    if fault.mode == "ambiguous":
+        try:
+            store.record(
+                trace_id,
+                "response_suppressed",
+                epoch=epoch,
+                reason="ambiguous_outcome",
+                task_id=task["id"],
+                committed=True,
             )
         except EpochStale as stale:
             _stale(stale.trace_id)
-
-        kind = result["kind"]
-        if kind == "patient_not_found":
-            _error(
-                404,
-                "patient_not_found",
-                "Unknown patient.",
-                trace_id,
-                patient_id=body.patient_id,
-            )
-        if kind == "idempotency_conflict":
-            _error(
-                409,
-                "idempotency_conflict",
-                "Idempotency key was reused with a different request body.",
-                trace_id,
-                task_id=result["task"]["id"],
-                committed=False,
-            )
-
-        task = result["task"]
-        if not store.epoch_is_current(epoch):
-            _stale(trace_id)
-        if fault.mode == "ambiguous":
-            try:
-                store.record(
-                    trace_id,
-                    "response_suppressed",
-                    epoch=epoch,
-                    reason="ambiguous_outcome",
-                    task_id=task["id"],
-                    committed=True,
-                )
-            except EpochStale as stale:
-                _stale(stale.trace_id)
-            _error(
-                504,
-                "ambiguous_outcome",
-                "Remote effect may have committed; client must inspect Forge evidence.",
-                trace_id,
-                committed=None,
-            )
-        if kind == "replay":
-            response.status_code = 200
-        return _public_task(task)
-    finally:
-        store.finish_request(epoch)
+        _error(
+            504,
+            "ambiguous_outcome",
+            "Remote effect may have committed; client must inspect Forge evidence.",
+            trace_id,
+            committed=None,
+        )
+    if kind == "replay":
+        response.status_code = 200
+    return _public_task(task)
 
 
 @app.get("/v1/tasks/{task_id}", response_model=Task, tags=["tasks"])

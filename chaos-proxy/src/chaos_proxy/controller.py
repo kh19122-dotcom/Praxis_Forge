@@ -38,6 +38,10 @@ class FaultController:
         self._resetting = False
         self._in_flight: dict[int, int] = {}
 
+    def in_flight_total(self) -> int:
+        with self._lock:
+            return sum(self._in_flight.values())
+
     def begin(self) -> int:
         with self._cond:
             while self._resetting:
