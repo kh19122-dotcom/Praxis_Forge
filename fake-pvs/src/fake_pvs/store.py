@@ -14,7 +14,7 @@ from fake_pvs.persist import PersistenceCrash, RestoreError, read_state, write_s
 from fake_pvs.settings import Settings
 
 STATE_SCHEMA = "praxis-forge.fake-pvs-state.v1"
-TRACE_RE = re.compile(r"^tr_[0-9]{6,}$")
+TRACE_RE = re.compile(r"^tr_([0-9]{6,})_([0-9]{6,})$")
 TASK_PRIORITIES = frozenset({"low", "normal", "high"})
 
 
@@ -97,7 +97,7 @@ class Store:
             self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
             try:
                 self._trace += 1
-                trace_id = f"tr_{self._trace:06d}"
+                trace_id = _format_trace_id(epoch, self._trace)
                 self._append_event_locked(trace_id, event_type, **details)
                 self._persist_locked()
             except Exception:
@@ -122,7 +122,7 @@ class Store:
             self._require_epoch_locked(epoch)
             self._trace += 1
             self._persist_locked()
-            return f"tr_{self._trace:06d}"
+            return _format_trace_id(self._epoch if epoch is None else epoch, self._trace)
 
     def record(
         self,
@@ -230,7 +230,7 @@ class Store:
             self._require_epoch_locked(epoch, trace_id or "tr_000000")
             if trace_id is None:
                 self._trace += 1
-                trace_id = f"tr_{self._trace:06d}"
+                trace_id = _format_trace_id(self._epoch if epoch is None else epoch, self._trace)
 
             existing_id = self.tasks_by_key.get(idempotency_key)
             if existing_id:
@@ -317,6 +317,7 @@ class Store:
             "seed": self.settings.seed,
             "seq": self._seq,
             "trace": self._trace,
+            "epoch": self._epoch,
             "tasks": self.tasks,
             "tasks_by_key": self.tasks_by_key,
             "events": self.events,
@@ -329,7 +330,7 @@ class Store:
         payload = read_state(path)
         if payload is None:
             return False
-        tasks, tasks_by_key, events, seq, trace = _validate_pvs_snapshot(
+        tasks, tasks_by_key, events, seq, trace, epoch = _validate_pvs_snapshot(
             payload, self.settings, self.patients
         )
         self.tasks = tasks
@@ -337,7 +338,19 @@ class Store:
         self.events = events
         self._seq = seq
         self._trace = trace
+        self._epoch = epoch
         return True
+
+
+def _format_trace_id(epoch: int, trace: int) -> str:
+    return f"tr_{epoch:06d}_{trace:06d}"
+
+
+def _parse_trace_id(trace_id: str) -> tuple[int, int] | None:
+    match = TRACE_RE.fullmatch(trace_id)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
 
 
 def _is_int(value: object) -> bool:
@@ -348,7 +361,7 @@ def _validate_pvs_snapshot(
     payload: dict[str, Any],
     settings: Settings,
     patients: dict[str, dict],
-) -> tuple[dict[str, dict], dict[str, str], list[dict], int, int]:
+) -> tuple[dict[str, dict], dict[str, str], list[dict], int, int, int]:
     if payload.get("schema") != STATE_SCHEMA:
         raise RestoreError("unsupported state schema")
     if payload.get("seed") != settings.seed:
@@ -358,11 +371,19 @@ def _validate_pvs_snapshot(
     events_raw = payload.get("events")
     seq = payload.get("seq")
     trace = payload.get("trace")
+    epoch = payload.get("epoch")
     if not isinstance(tasks_raw, dict) or not isinstance(tasks_by_key_raw, dict):
         raise RestoreError("task maps must be objects")
     if not isinstance(events_raw, list):
         raise RestoreError("events must be a list")
-    if not _is_int(seq) or not _is_int(trace) or seq < 0 or trace < 0:
+    if (
+        not _is_int(seq)
+        or not _is_int(trace)
+        or not _is_int(epoch)
+        or seq < 0
+        or trace < 0
+        or epoch < 0
+    ):
         raise RestoreError("sequence counters are invalid")
 
     tasks: dict[str, dict] = {}
@@ -406,14 +427,14 @@ def _validate_pvs_snapshot(
 
     events = _validate_events(events_raw, seq, trace)
     _validate_commit_evidence(tasks, events)
-    return tasks, tasks_by_key, events, seq, trace
+    return tasks, tasks_by_key, events, seq, trace, epoch
 
 
 def _validate_events(events_raw: list[object], seq: int, trace: int) -> list[dict]:
     events: list[dict] = []
     seen_seq: set[int] = set()
     max_seq = 0
-    max_trace = 0
+    max_local_trace = 0
     for item in events_raw:
         if not isinstance(item, dict):
             raise RestoreError("event entry is not an object")
@@ -423,7 +444,8 @@ def _validate_events(events_raw: list[object], seq: int, trace: int) -> list[dic
             raise RestoreError("malformed event") from exc
         if event.seq <= 0 or event.seq in seen_seq:
             raise RestoreError("event sequence is invalid")
-        if not TRACE_RE.fullmatch(event.trace_id):
+        parsed = _parse_trace_id(event.trace_id)
+        if parsed is None:
             raise RestoreError("event trace_id is invalid")
         if not event.type or not isinstance(event.type, str):
             raise RestoreError("event type is invalid")
@@ -431,9 +453,9 @@ def _validate_events(events_raw: list[object], seq: int, trace: int) -> list[dic
             raise RestoreError("event details must be an object")
         seen_seq.add(event.seq)
         max_seq = max(max_seq, event.seq)
-        max_trace = max(max_trace, int(event.trace_id.split("_", 1)[1]))
+        max_local_trace = max(max_local_trace, parsed[1])
         events.append(event.model_dump())
-    if max_seq > seq or max_trace > trace:
+    if max_seq > seq or max_local_trace > trace:
         raise RestoreError("counters do not dominate restored events")
     return events
 

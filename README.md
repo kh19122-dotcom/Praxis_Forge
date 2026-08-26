@@ -254,7 +254,8 @@ Test containers and host unit tests leave `FORGE_STATE_PATH` unset.
 - waits for those operations to finish or deterministically fail closed (`409 epoch_stale` on simulators; dropped proxy evidence/fault consumption)
 - reseeds catalog/corpus from the current `FORGE_SEED`
 - clears bookings/tasks, idempotency maps, events, and faults
-- starts a new trace/event sequence so pre-reset and post-reset identities cannot collide
+- issues epoch-qualified trace IDs (`tr_{epoch}_{n}`) so a pre-reset trace ID can never identify a post-reset operation
+- waits for in-flight chaos-proxy request lifetimes, including blocked upstream calls, before reset returns
 - overwrites the durable state file with that baseline when `FORGE_STATE_PATH` is set
 
 A successful business commit writes the remote object, idempotency mapping, slot consumption, and matching `*_committed` evidence in one Store snapshot. A crash at that persistence boundary restores either no effect or effect-plus-evidence, never effect without committed evidence.

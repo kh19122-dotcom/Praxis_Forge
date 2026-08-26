@@ -64,4 +64,31 @@ def test_delayed_create_cannot_mutate_after_reset() -> None:
         assert "booking_requested" in types
         assert "booking_committed" in types
         traces = {event["trace_id"] for event in client.get("/v1/admin/events").json()["events"]}
-        assert traces == {"tr_000001"}
+        assert traces == {f"tr_{store.epoch():06d}_000001"}
+
+
+def test_pre_reset_trace_id_is_never_reused() -> None:
+    store.settings = Settings(seed="obj-001", state_path=None)
+    store.reset()
+    with TestClient(app) as client:
+        slot = _first_slot(client)
+        first = client.post(
+            "/v1/bookings",
+            headers={"Idempotency-Key": "pre-reset-trace-booking"},
+            json={"slot_id": slot["id"], "patient_ref": "synth-ada"},
+        )
+        assert first.status_code == 201
+        before = {event["trace_id"] for event in client.get("/v1/admin/events").json()["events"]}
+        assert before
+        assert all(trace.startswith("tr_") and trace.count("_") == 2 for trace in before)
+        reset = client.post("/v1/admin/reset")
+        assert reset.status_code == 200
+        created = client.post(
+            "/v1/bookings",
+            headers={"Idempotency-Key": "post-reset-trace-booking"},
+            json={"slot_id": slot["id"], "patient_ref": "synth-ada"},
+        )
+        assert created.status_code == 201
+        after = {event["trace_id"] for event in client.get("/v1/admin/events").json()["events"]}
+        assert after
+        assert before.isdisjoint(after)
