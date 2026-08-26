@@ -164,6 +164,32 @@ services:
       chaos-pvs:
         condition: service_healthy
 
+  scenario-runner-soak:
+    profiles: ["scenario"]
+    build:
+      context: ./scenario-runner
+      target: runtime
+    environment:
+      FORGE_BOOKING_URL: http://fake-booking:8080
+      FORGE_PVS_URL: http://fake-pvs:8081
+      FORGE_BOOKING_CHAOS_URL: http://chaos-booking:8090
+      FORGE_PVS_CHAOS_URL: http://chaos-pvs:8091
+      FORGE_BOOKING_CHAOS_ADMIN_URL: http://chaos-booking:8092
+      FORGE_PVS_CHAOS_ADMIN_URL: http://chaos-pvs:8093
+      FORGE_EVIDENCE_FILE: /evidence/soak.json
+    command: ["--soak", "--iterations", "2", "--suite", "all"]
+    volumes:
+      - ./artifacts:/evidence
+    depends_on:
+      fake-booking:
+        condition: service_healthy
+      fake-pvs:
+        condition: service_healthy
+      chaos-booking:
+        condition: service_healthy
+      chaos-pvs:
+        condition: service_healthy
+
   scenario-runner-tests:
     profiles: ["test"]
     build:

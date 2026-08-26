@@ -261,7 +261,7 @@ def test_cli_nonzero_when_scenario_fails(
 
 def test_source_has_no_simulator_imports() -> None:
     root = Path(__file__).resolve().parents[1]
-    forbidden = ("fake_booking", "fake_pvs", "praxisos", "PraxisOS")
+    forbidden = ("fake_booking", "fake_pvs", "chaos_proxy", "praxisos", "PraxisOS", "docker.sock")
     for path in (root / "src").rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
