@@ -322,6 +322,8 @@ Transport-chaos scenarios (`--suite transport-chaos`):
 
 Semantic scenarios start with `POST /v1/admin/reset` on both simulators and inject faults only through simulator `PUT /v1/admin/faults`. Transport-chaos scenarios also reset/arm the chaos proxies and send mutating calls through chaos-proxied endpoints. Evidence reads stay on the direct simulator APIs. The CLI prints one JSON object to stdout. Process exit code `0` means the suite passed; any scenario or health-check failure exits `1`.
 
+One-shot `--suite semantic` and `--suite transport-chaos` stay backward compatible. Soak/replay is an additive mode around the same HTTP scenarios.
+
 ### Run the suite against Compose services
 
 macOS and Linux, from a fresh checkout of the repository root:
@@ -353,6 +355,47 @@ Run one named scenario:
 docker compose --profile scenario run --rm --build scenario-runner --scenario combined-happy-path
 ```
 
+### Soak, replay, and evidence files
+
+Soak mode repeats the existing named suites. It is a bounded CLI harness, not a scheduler or audit pipeline. Each iteration starts by calling the existing HTTP reset APIs (`POST /v1/admin/reset` on the simulators, and on the chaos admins when transport-chaos runs). The runner never talks to the Docker socket.
+
+Default soak length is 3 iterations. The hard cap is 20. CI uses 2 iterations of `--suite all`.
+
+```bash
+mkdir -p artifacts
+docker compose --profile scenario run --rm --build scenario-runner-soak
+```
+
+That Compose service runs:
+
+```bash
+scenario-runner --soak --iterations 2 --suite all
+```
+
+and writes the full JSON evidence report to `artifacts/soak.json` (`FORGE_EVIDENCE_FILE=/evidence/soak.json`). Stdout is a concise machine-readable soak summary: overall status, requested/completed iteration counts, suites, per-iteration status, scenario names/status/IDs, replay selectors, and `first_failure` when a scenario fails. A failed iteration makes the process exit `1`.
+
+Host CLI equivalents:
+
+```bash
+scenario-runner --soak
+scenario-runner --soak --iterations 2 --suite semantic
+scenario-runner --soak --iterations 2 --suite transport-chaos
+scenario-runner --soak --iterations 2 --suite all --evidence-file artifacts/soak.json
+```
+
+Replay one deterministic iteration/suite configuration without hidden process state. The selector is `SUITE:INDEX` or a 1-based index used with `--suite`:
+
+```bash
+scenario-runner --replay semantic:2 --evidence-file artifacts/replay.json
+scenario-runner --replay transport-chaos:1
+scenario-runner --replay 2 --suite semantic
+docker compose --profile scenario run --rm --build scenario-runner-soak --replay semantic:2 --evidence-file /evidence/replay.json
+```
+
+Replay re-runs that suite against live HTTP services after the same external reset. It does not reload prior process memory. Booking/task/trace IDs stay seed-derived, so a passing replay of the same selector repeats the same IDs.
+
+Evidence files are local test artifacts (`schema: praxis-forge.soak-evidence.v1`), not production audit logs. The file includes the full per-step scenario reports; stdout omits steps.
+
 ### Run from the host against published loopback ports
 
 Start the simulators, then install and run the CLI with Python 3.12+:
@@ -367,6 +410,8 @@ pip install -e ".[dev]"
 scenario-runner --list
 scenario-runner
 scenario-runner --scenario combined-happy-path
+scenario-runner --soak --iterations 2 --evidence-file ../artifacts/soak.json
+scenario-runner --replay semantic:2
 ```
 
 The defaults are `http://127.0.0.1:8080` and `http://127.0.0.1:8081`. Override with `--booking-url`, `--pvs-url`, or `FORGE_BOOKING_URL` / `FORGE_PVS_URL`.
@@ -377,6 +422,7 @@ Transport-chaos from the host also needs the proxies:
 docker compose up --build -d fake-booking fake-pvs chaos-booking chaos-pvs
 scenario-runner --suite transport-chaos --list
 scenario-runner --suite transport-chaos
+scenario-runner --soak --suite transport-chaos --iterations 2
 ```
 
 Host defaults for chaos URLs are `http://127.0.0.1:8090`, `http://127.0.0.1:8091`, `http://127.0.0.1:8092`, and `http://127.0.0.1:8093`.
@@ -400,4 +446,4 @@ ruff check src tests
 pytest -q
 ```
 
-The unit suite uses in-process HTTP fakes. CI also runs the semantic suite and the transport-chaos suite against real Compose containers.
+The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, and a 2-iteration soak against real Compose containers, then validates the generated evidence artifact.

@@ -42,6 +42,17 @@ def test_compose_keeps_admin_ports_loopback_and_runner_on_internal_http() -> Non
     assert "FORGE_PVS_CHAOS_ADMIN_URL: http://chaos-pvs:8093" in text
     assert "scenario-runner:" in text
     assert "scenario-runner-transport:" in text
+    assert "scenario-runner-soak:" in text
+    assert "--soak" in text
+    assert "--iterations" in text
+    assert "FORGE_EVIDENCE_FILE: /evidence/soak.json" in text
+    assert "docker.sock" not in text
+    assert "/var/run/docker.sock" not in text
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    if dockerfile.is_file():
+        docker_text = dockerfile.read_text(encoding="utf-8")
+        assert "docker.sock" not in docker_text
+        assert "/var/run/docker.sock" not in docker_text
     for raw in text.splitlines():
         stripped = raw.split("#", 1)[0].strip().lstrip("-").strip().strip("\"'")
         if HOST_PORT_PUBLISH.fullmatch(stripped):

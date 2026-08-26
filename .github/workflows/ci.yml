@@ -86,3 +86,57 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run transport-chaos scenarios against Compose services
         run: docker compose --profile scenario run --rm --build scenario-runner-transport
+
+  soak-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run bounded soak against Compose services
+        run: |
+          mkdir -p artifacts
+          docker compose --profile scenario run --rm --build scenario-runner-soak
+      - name: Validate soak evidence artifact
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("artifacts/soak.json").read_text(encoding="utf-8"))
+          required = (
+              "schema",
+              "status",
+              "mode",
+              "suites",
+              "requested_iterations",
+              "completed_iterations",
+              "replay_selector",
+              "iterations",
+              "first_failure",
+          )
+          missing = [key for key in required if key not in payload]
+          if missing:
+              raise SystemExit(f"evidence missing keys: {missing}")
+          if payload["schema"] != "praxis-forge.soak-evidence.v1":
+              raise SystemExit(f"unexpected schema: {payload['schema']!r}")
+          if payload["status"] != "pass" or payload["mode"] != "soak":
+              raise SystemExit(payload)
+          if payload["requested_iterations"] != 2 or payload["completed_iterations"] != 2:
+              raise SystemExit(payload)
+          if payload["suites"] != ["semantic", "transport-chaos"]:
+              raise SystemExit(f"unexpected suites: {payload['suites']!r}")
+          selectors = [item["replay_selector"] for item in payload["iterations"]]
+          if selectors != [
+              "semantic:1",
+              "transport-chaos:1",
+              "semantic:2",
+              "transport-chaos:2",
+          ]:
+              raise SystemExit(f"unexpected selectors: {selectors!r}")
+          for item in payload["iterations"]:
+              if item["status"] != "pass" or not item["scenarios"]:
+                  raise SystemExit(item)
+              for scenario in item["scenarios"]:
+                  if scenario["status"] != "pass" or "name" not in scenario or "ids" not in scenario:
+                      raise SystemExit(scenario)
+          print("soak evidence ok")
+          PY
