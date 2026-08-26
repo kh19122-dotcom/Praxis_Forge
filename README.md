@@ -446,4 +446,92 @@ ruff check src tests
 pytest -q
 ```
 
-The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, and a 2-iteration soak against real Compose containers, then validates the generated evidence artifact.
+The unit suite uses in-process HTTP fakes. CI also runs the semantic suite, the transport-chaos suite, the contract gate, and a 2-iteration soak against real Compose containers, then validates the generated evidence artifact.
+
+## Contract check
+
+The sixth vertical slice is a standalone HTTP-only contract gate. It treats Fake Booking and Fake PVS as external vendors. It does not import either simulator package.
+
+Canonical contract:
+
+- Packaged OpenAPI YAML served at `/openapi.yaml` is the documented contract of record (`fake-booking/src/fake_booking/openapi.yaml`, `fake-pvs/src/fake_pvs/openapi.yaml`).
+- Runtime `/openapi.json` is FastAPI's generated view of the implemented HTTP surface.
+- The gate fetches both live documents, plus the public/admin paths used by the scenario runner, and compares a normalized semantic snapshot. It does not require byte-identical YAML and JSON.
+
+Compared dimensions:
+
+- path + HTTP method set
+- required scenario-runner public/admin operations
+- required `Idempotency-Key` on `POST /v1/bookings` and `POST /v1/tasks`
+- representative request required fields / basic schema shape
+- documented YAML status codes and representative JSON success-response required fields
+- committed normalized fingerprint (`contract-check/src/contract_check/data/fingerprints.json`)
+
+Intentionally ignored:
+
+- description/summary/tag/title/example/server text
+- FastAPI `HTTPValidationError` envelope internals
+- error status codes present in packaged YAML but omitted from generated JSON
+- harmless JSON Schema representation differences (`0` vs `0.0`)
+
+A mismatch prints one JSON object to stdout and exits `1`. Exit `0` means both services passed.
+
+### Run against Compose services
+
+macOS and Linux, from the repository root:
+
+```bash
+docker compose --profile contract run --rm --build contract-check
+```
+
+That command starts both simulators, waits for their health checks, and fetches `http://fake-booking:8080` and `http://fake-pvs:8081` over the Compose network.
+
+### Run from the host against published loopback ports
+
+```bash
+docker compose up --build -d fake-booking fake-pvs
+
+cd contract-check
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+contract-check
+```
+
+The defaults are `http://127.0.0.1:8080` and `http://127.0.0.1:8081`. Override with `--booking-url`, `--pvs-url`, or `FORGE_BOOKING_URL` / `FORGE_PVS_URL`.
+
+### Intentional contract changes
+
+After a deliberate HTTP-surface change (path/method, idempotency header, request/response required fields, or documented status codes):
+
+1. Update the packaged YAML and the FastAPI handlers together.
+2. Refresh the committed fingerprint from the host against live loopback ports (the Compose service cannot write the repo file):
+
+```bash
+contract-check --update-fingerprint
+```
+
+3. Review the fingerprint diff in the same PR as the contract change. Do not change simulator APIs merely to make YAML and generated JSON textually identical.
+
+The packaged fingerprint is `schema: praxis-forge.contract-fingerprint.v1`. Regenerating it with a fixed live contract is deterministic.
+
+### Tests
+
+Docker (from the repository root):
+
+```bash
+docker compose --profile test run --rm contract-check-tests
+```
+
+Local (Python 3.12+):
+
+```bash
+cd contract-check
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+ruff check src tests
+pytest -q
+```
+
+The unit suite uses in-process HTTP fakes. CI also runs the contract gate against real Compose simulator containers.
