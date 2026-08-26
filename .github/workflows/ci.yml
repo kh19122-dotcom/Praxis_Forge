@@ -189,6 +189,20 @@ jobs:
       - name: Run host-side restart-recovery gate against Compose containers
         run: python3 scripts/restart_recovery.py
 
+  crash-consistency-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install simulator packages for failpoint gate
+        run: |
+          pip install -e "./fake-booking"
+          pip install -e "./fake-pvs"
+      - name: Run host-side crash-consistency failpoint gate
+        run: python3 scripts/crash_consistency.py
+
   cross-compose-lab-suite:
     runs-on: ubuntu-latest
     steps:

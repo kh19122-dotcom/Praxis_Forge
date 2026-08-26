@@ -38,6 +38,12 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
                 "idempotency_key": self.headers.get("Idempotency-Key"),
             }
         )
+        entered = getattr(self.server, "entered", None)
+        if entered is not None:
+            entered.set()
+        hold = getattr(self.server, "hold", None)
+        if hold is not None:
+            hold.wait()
         if self.path.startswith("/v1/bookings") and self.command == "POST":
             payload = b'{"id":"bkg_1","status":"confirmed"}'
             status = 201

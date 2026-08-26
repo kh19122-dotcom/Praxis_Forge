@@ -89,74 +89,84 @@ class ProxyHandler(_BaseHandler):
         body = read_body(self)
         headers = header_map(self)
         target = request_target(self)
-        controller.record(
-            "request_received",
-            method=method,
-            path=path,
-            idempotency_key=key,
-        )
-        fault = None
-        if not (method == "GET" and path == "/healthz"):
-            fault = controller.consume(method, path, key)
-        if fault and fault.mode == "drop_before_upstream":
+        epoch = controller.begin()
+        try:
             controller.record(
-                "dropped_before_upstream",
+                "request_received",
+                epoch=epoch,
                 method=method,
                 path=path,
                 idempotency_key=key,
             )
-            _drop_connection(self)
-            return
-        try:
-            upstream = self.server.upstream
-            if upstream is None:
-                raise RuntimeError("upstream client is not configured")
-            response = upstream.request(method, target, content=body, headers=headers)
-        except httpx.HTTPError as exc:
+            fault = None
+            if not (method == "GET" and path == "/healthz"):
+                fault = controller.consume(method, path, key, epoch=epoch)
+            if fault and fault.mode == "drop_before_upstream":
+                controller.record(
+                    "dropped_before_upstream",
+                    epoch=epoch,
+                    method=method,
+                    path=path,
+                    idempotency_key=key,
+                )
+                _drop_connection(self)
+                return
+            try:
+                upstream = self.server.upstream
+                if upstream is None:
+                    raise RuntimeError("upstream client is not configured")
+                response = upstream.request(method, target, content=body, headers=headers)
+            except httpx.HTTPError as exc:
+                controller.record(
+                    "upstream_error",
+                    epoch=epoch,
+                    method=method,
+                    path=path,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                send_json(
+                    self,
+                    502,
+                    {
+                        "error": "upstream_unreachable",
+                        "message": str(exc),
+                        "service": self.server.settings.service_name,
+                    },
+                )
+                return
             controller.record(
-                "upstream_error",
-                method=method,
-                path=path,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            send_json(
-                self,
-                502,
-                {
-                    "error": "upstream_unreachable",
-                    "message": str(exc),
-                    "service": self.server.settings.service_name,
-                },
-            )
-            return
-        controller.record(
-            "upstream_completed",
-            method=method,
-            path=path,
-            idempotency_key=key,
-            upstream_status=response.status_code,
-        )
-        if fault and fault.mode == "drop_after_upstream":
-            controller.record(
-                "dropped_after_upstream",
+                "upstream_completed",
+                epoch=epoch,
                 method=method,
                 path=path,
                 idempotency_key=key,
                 upstream_status=response.status_code,
             )
-            _drop_connection(self)
-            return
-        if fault and fault.mode == "delay":
-            delay_ms = fault.delay_ms
-            if delay_ms:
-                time.sleep(delay_ms / 1000)
-            controller.record(
-                "response_delayed",
-                method=method,
-                path=path,
-                delay_ms=delay_ms,
-            )
-        send_raw(self, response.status_code, list(response.headers.items()), response.content)
+            if fault and fault.mode == "drop_after_upstream":
+                controller.record(
+                    "dropped_after_upstream",
+                    epoch=epoch,
+                    method=method,
+                    path=path,
+                    idempotency_key=key,
+                    upstream_status=response.status_code,
+                )
+                _drop_connection(self)
+                return
+            if fault and fault.mode == "delay":
+                delay_ms = fault.delay_ms
+                if delay_ms:
+                    time.sleep(delay_ms / 1000)
+                controller.record(
+                    "response_delayed",
+                    epoch=epoch,
+                    method=method,
+                    path=path,
+                    delay_ms=delay_ms,
+                )
+            send_raw(self, response.status_code, list(response.headers.items()), response.content)
+        finally:
+            controller.finish(epoch)
 
 
 class AdminHandler(_BaseHandler):

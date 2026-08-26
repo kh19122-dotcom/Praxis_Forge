@@ -30,9 +30,30 @@ class Fault:
 class FaultController:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
         self._fault = Fault()
         self._events: list[dict[str, Any]] = []
         self._seq = 0
+        self._epoch = 0
+        self._resetting = False
+        self._in_flight: dict[int, int] = {}
+
+    def begin(self) -> int:
+        with self._cond:
+            while self._resetting:
+                self._cond.wait()
+            epoch = self._epoch
+            self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
+            return epoch
+
+    def finish(self, epoch: int) -> None:
+        with self._cond:
+            remaining = self._in_flight.get(epoch, 0)
+            if remaining <= 1:
+                self._in_flight.pop(epoch, None)
+            else:
+                self._in_flight[epoch] = remaining - 1
+            self._cond.notify_all()
 
     def snapshot(self) -> Fault:
         with self._lock:
@@ -46,10 +67,17 @@ class FaultController:
         return [event for event in events if event.get("type") == event_type]
 
     def reset(self) -> Fault:
-        with self._lock:
+        with self._cond:
+            self._resetting = True
+            stale = self._epoch
+            self._epoch += 1
+            while self._in_flight.get(stale, 0) > 0:
+                self._cond.wait()
             self._fault = Fault()
             self._events = []
             self._seq = 0
+            self._resetting = False
+            self._cond.notify_all()
             return self._fault
 
     def configure(self, payload: dict[str, Any]) -> Fault:
@@ -93,9 +121,16 @@ class FaultController:
             return fault
 
     def consume(
-        self, method: str, path: str, idempotency_key: str | None
+        self,
+        method: str,
+        path: str,
+        idempotency_key: str | None,
+        *,
+        epoch: int | None = None,
     ) -> Fault | None:
         with self._lock:
+            if epoch is not None and epoch != self._epoch:
+                return None
             current = self._fault
             if current.mode == "none" or current.remaining <= 0:
                 return None
@@ -127,8 +162,10 @@ class FaultController:
             )
             return current
 
-    def record(self, event_type: str, **details: object) -> None:
+    def record(self, event_type: str, *, epoch: int | None = None, **details: object) -> None:
         with self._lock:
+            if epoch is not None and epoch != self._epoch:
+                return
             self._record_locked(event_type, **details)
 
     def _record_locked(self, event_type: str, **details: object) -> None:
