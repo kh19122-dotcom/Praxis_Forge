@@ -469,7 +469,7 @@ Compared dimensions:
 
 Intentionally ignored:
 
-- description/summary/tag/title/example/server text
+- OpenAPI `info.title` / `info.description` / `info.version`, plus summary/tag/example/server text
 - FastAPI `HTTPValidationError` envelope internals
 - error status codes present in packaged YAML but omitted from generated JSON
 - harmless JSON Schema representation differences (`0` vs `0.0`)

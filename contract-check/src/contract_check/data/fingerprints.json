@@ -3,7 +3,7 @@
   "schema": "praxis-forge.contract-fingerprint.v1",
   "services": {
     "fake-booking": {
-      "digest": "8ca1ed0ff3a6084f8fb067a041ec341ef3a4009aa55292b945bc14f950dd2ad9",
+      "digest": "c5315b667a9a64c3a19d5447bbb5f6a93dae333f9f53f26659682bce55fc224f",
       "snapshot": {
         "idempotent_write": "POST /v1/bookings",
         "json_operations": [
@@ -16,8 +16,6 @@
           "POST /v1/bookings",
           "PUT /v1/admin/faults"
         ],
-        "json_title": "Praxis Forge Fake Booking",
-        "json_version": "0.1.0",
         "operations": {
           "GET /healthz": {
             "json": {
@@ -394,13 +392,11 @@
           "POST /v1/admin/reset",
           "POST /v1/bookings",
           "PUT /v1/admin/faults"
-        ],
-        "yaml_title": "Praxis Forge Fake Booking",
-        "yaml_version": "0.1.0"
+        ]
       }
     },
     "fake-pvs": {
-      "digest": "74fdf43f3f2d8a40bcdde934eb7b8c6e06ce64be6c84197619c7e8490937634b",
+      "digest": "e61ba4e76906440c9537b24f45d6d2b41afb0b3828d51706411647d11906d3f0",
       "snapshot": {
         "idempotent_write": "POST /v1/tasks",
         "json_operations": [
@@ -416,8 +412,6 @@
           "POST /v1/tasks",
           "PUT /v1/admin/faults"
         ],
-        "json_title": "Praxis Forge Fake PVS",
-        "json_version": "0.1.0",
         "operations": {
           "GET /healthz": {
             "json": {
@@ -917,9 +911,7 @@
           "POST /v1/admin/reset",
           "POST /v1/tasks",
           "PUT /v1/admin/faults"
-        ],
-        "yaml_title": "Praxis Forge Fake PVS",
-        "yaml_version": "0.1.0"
+        ]
       }
     }
   }

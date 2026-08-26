@@ -23,7 +23,7 @@ COMPARED_DIMENSIONS = (
 )
 
 IGNORED_DIMENSIONS = (
-    "info.description and operation summary/description/tags",
+    "info.title, info.description, info.version, and operation summary/description/tags",
     "schema titles, examples, servers, and vendor extensions",
     "byte-identical YAML vs generated JSON",
     "FastAPI HTTPValidationError envelope internals",
@@ -50,18 +50,8 @@ def build_snapshot(
             "yaml": _public_op(yaml_op),
             "json": _public_op(json_op),
         }
-    yaml_info = (
-        yaml_spec.get("info") if isinstance(yaml_spec.get("info"), dict) else {}
-    )
-    json_info = (
-        json_spec.get("info") if isinstance(json_spec.get("info"), dict) else {}
-    )
     return {
         "service": service,
-        "yaml_title": yaml_info.get("title"),
-        "json_title": json_info.get("title"),
-        "yaml_version": yaml_info.get("version"),
-        "json_version": json_info.get("version"),
         "yaml_operations": sorted(yaml_ops),
         "json_operations": sorted(json_ops),
         "required_operations": [

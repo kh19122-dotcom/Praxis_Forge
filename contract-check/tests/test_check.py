@@ -4,11 +4,15 @@ import copy
 import json
 from pathlib import Path
 
+import yaml
+
 from contract_check.check import REPORT_SCHEMA, check_contracts
 from contract_check.cli import main
 from contract_check.fingerprint import SCHEMA as FINGERPRINT_SCHEMA
 from contract_check.fingerprint import digest_snapshot
-from tests.fakes import SpecServer, clients_for, load_json_spec
+from contract_check.normalize import parse_yaml_spec
+from contract_check.surface import build_snapshot
+from tests.fakes import SpecServer, clients_for, load_fixture, load_json_spec
 
 
 def _run(tmp_path: Path, server: SpecServer, *, update: bool = False) -> tuple[int, dict]:
@@ -87,6 +91,61 @@ def test_packaged_fingerprint_matches_fixtures() -> None:
             service, yaml_spec, json_spec, expected["services"][service]
         )
         assert mismatches == []
+
+
+def test_harmless_openapi_info_metadata_does_not_change_digest(tmp_path: Path) -> None:
+    baseline = _seed_fingerprint(tmp_path)
+    booking_json = load_json_spec("fake-booking")
+    pvs_json = load_json_spec("fake-pvs")
+    booking_yaml = parse_yaml_spec(load_fixture("fake-booking", "yaml"))
+    pvs_yaml = parse_yaml_spec(load_fixture("fake-pvs", "yaml"))
+    original_booking = build_snapshot("fake-booking", booking_yaml, booking_json)
+    original_pvs = build_snapshot("fake-pvs", pvs_yaml, pvs_json)
+
+    mutated_booking_json = copy.deepcopy(booking_json)
+    mutated_booking_json["info"]["title"] = "Harmless Booking Title"
+    mutated_booking_json["info"]["description"] = "Harmless booking description."
+    mutated_booking_json["info"]["version"] = "9.9.9"
+    mutated_pvs_json = copy.deepcopy(pvs_json)
+    mutated_pvs_json["info"]["title"] = "Harmless PVS Title"
+    mutated_pvs_json["info"]["description"] = "Harmless pvs description."
+    mutated_pvs_json["info"]["version"] = "9.9.9"
+    mutated_booking_yaml = copy.deepcopy(booking_yaml)
+    mutated_booking_yaml["info"]["title"] = "Harmless YAML Booking Title"
+    mutated_booking_yaml["info"]["description"] = "Harmless YAML booking description."
+    mutated_booking_yaml["info"]["version"] = "8.8.8"
+    mutated_pvs_yaml = copy.deepcopy(pvs_yaml)
+    mutated_pvs_yaml["info"]["title"] = "Harmless YAML PVS Title"
+    mutated_pvs_yaml["info"]["description"] = "Harmless YAML pvs description."
+    mutated_pvs_yaml["info"]["version"] = "8.8.8"
+
+    mutated_booking = build_snapshot(
+        "fake-booking", mutated_booking_yaml, mutated_booking_json
+    )
+    mutated_pvs = build_snapshot("fake-pvs", mutated_pvs_yaml, mutated_pvs_json)
+    assert digest_snapshot(mutated_booking) == digest_snapshot(original_booking)
+    assert digest_snapshot(mutated_pvs) == digest_snapshot(original_pvs)
+
+    code, report = _run(
+        tmp_path,
+        SpecServer(
+            booking_json=mutated_booking_json,
+            booking_yaml=yaml.safe_dump(mutated_booking_yaml, sort_keys=False),
+            pvs_json=mutated_pvs_json,
+            pvs_yaml=yaml.safe_dump(mutated_pvs_yaml, sort_keys=False),
+        ),
+    )
+    assert code == 0
+    assert report["status"] == "pass"
+    assert report["mismatches"] == []
+    assert (
+        report["services"]["fake-booking"]["digest"]
+        == baseline["services"]["fake-booking"]["digest"]
+    )
+    assert (
+        report["services"]["fake-pvs"]["digest"]
+        == baseline["services"]["fake-pvs"]["digest"]
+    )
 
 
 def test_missing_path_is_mismatch(tmp_path: Path) -> None:
