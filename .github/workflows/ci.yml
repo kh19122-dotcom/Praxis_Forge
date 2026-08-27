@@ -15,8 +15,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pin pip
+        run: python -m pip install --disable-pip-version-check pip==25.0.1
       - name: Install
-        run: pip install -e ".[dev]"
+        run: |
+          pip install --disable-pip-version-check --require-hashes -r constraints-dev.txt
+          pip install --disable-pip-version-check --no-deps -e .
       - name: Lint
         run: ruff check src tests
       - name: Test
@@ -32,8 +36,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pin pip
+        run: python -m pip install --disable-pip-version-check pip==25.0.1
       - name: Install
-        run: pip install -e ".[dev]"
+        run: |
+          pip install --disable-pip-version-check --require-hashes -r constraints-dev.txt
+          pip install --disable-pip-version-check --no-deps -e .
       - name: Lint
         run: ruff check src tests
       - name: Test
@@ -49,8 +57,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pin pip
+        run: python -m pip install --disable-pip-version-check pip==25.0.1
       - name: Install
-        run: pip install -e ".[dev]"
+        run: |
+          pip install --disable-pip-version-check --require-hashes -r constraints-dev.txt
+          pip install --disable-pip-version-check --no-deps -e .
       - name: Lint
         run: ruff check src tests
       - name: Test
@@ -66,8 +78,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pin pip
+        run: python -m pip install --disable-pip-version-check pip==25.0.1
       - name: Install
-        run: pip install -e ".[dev]"
+        run: |
+          pip install --disable-pip-version-check --require-hashes -r constraints-dev.txt
+          pip install --disable-pip-version-check --no-deps -e .
       - name: Lint
         run: ruff check src tests
       - name: Test
@@ -83,8 +99,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pin pip
+        run: python -m pip install --disable-pip-version-check pip==25.0.1
       - name: Install
-        run: pip install -e ".[dev]"
+        run: |
+          pip install --disable-pip-version-check --require-hashes -r constraints-dev.txt
+          pip install --disable-pip-version-check --no-deps -e .
       - name: Lint
         run: ruff check src tests
       - name: Test
@@ -100,12 +120,88 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pin pip
+        run: python -m pip install --disable-pip-version-check pip==25.0.1
       - name: Install
-        run: pip install -e ".[dev]"
+        run: |
+          pip install --disable-pip-version-check --require-hashes -r constraints-dev.txt
+          pip install --disable-pip-version-check --no-deps -e .
       - name: Lint
         run: ruff check src tests
       - name: Test
         run: pytest -q
+
+  lock-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.11.28"
+      - name: Validate committed locks and Python base pin
+        run: python3 scripts/validate_locks.py
+
+  container-unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - fake-booking-tests
+          - fake-pvs-tests
+          - chaos-proxy-tests
+          - scenario-runner-tests
+          - contract-check-tests
+          - external-client-tests
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run documented containerized unit-test target
+        run: docker compose --profile test run --rm --build ${{ matrix.service }}
+
+  image-build-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - fake-booking
+          - fake-pvs
+          - chaos-proxy
+          - scenario-runner
+          - contract-check
+          - external-client
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build test target
+        run: |
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --target test \
+            --load \
+            -t praxis-forge/${{ matrix.component }}:test-${{ matrix.arch }} \
+            ./${{ matrix.component }}
+      - name: Verify installed versions against the committed lock
+        run: |
+          python3 scripts/verify_installed_versions.py \
+            --skip-build \
+            --target test \
+            --platform ${{ matrix.platform }} \
+            --image praxis-forge/${{ matrix.component }}:test-${{ matrix.arch }} \
+            ${{ matrix.component }}
+      - name: Report architecture coverage
+        run: |
+          echo "built=${{ matrix.component }} test target on ${{ matrix.platform }}"
+          echo "executed=pip freeze comparison on ${{ matrix.platform }}"
+          echo "pytest_on_this_job=no"
+          echo "pytest_runs_in=container-unit-tests on ubuntu-latest linux/amd64"
 
   contract-suite:
     runs-on: ubuntu-latest
@@ -196,10 +292,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pin pip
+        run: python -m pip install --disable-pip-version-check pip==25.0.1
       - name: Install simulator packages for failpoint gate
         run: |
-          pip install -e "./fake-booking"
-          pip install -e "./fake-pvs"
+          pip install --disable-pip-version-check --require-hashes -r ./fake-booking/constraints.txt
+          pip install --disable-pip-version-check --no-deps -e "./fake-booking"
+          pip install --disable-pip-version-check --require-hashes -r ./fake-pvs/constraints.txt
+          pip install --disable-pip-version-check --no-deps -e "./fake-pvs"
       - name: Run host-side crash-consistency failpoint gate
         run: python3 scripts/crash_consistency.py
 
