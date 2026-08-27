@@ -695,17 +695,27 @@ def test_absent_fault_field_restores_historical_default(tmp_path: Path) -> None:
     created = first.create_task("fault-absent-0001", "synth-ada", "synth-task", "normal")
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     payload.pop("fault", None)
-    Path(path).write_text(json.dumps(payload), encoding="utf-8")
+    original = json.dumps(payload)
+    Path(path).write_text(original, encoding="utf-8")
     restored = Store(Settings(seed="obj-002", state_path=path))
     assert restored.get_task(created["task"]["id"]) is not None
     assert restored.fault.mode == "none"
     assert restored.fault.remaining == 0
     assert restored.fault.delay_ms == 50
-    assert "fault" not in json.loads(Path(path).read_text(encoding="utf-8"))
+    assert restored.fault.idempotency_key is None
+    assert Path(path).read_text(encoding="utf-8") == original
     restored.configure_fault(FaultConfig(mode="none"))
     rewritten = json.loads(Path(path).read_text(encoding="utf-8"))
     assert rewritten["fault"]["mode"] == "none"
     assert rewritten["fault"]["remaining"] == 0
+
+
+def test_explicit_null_fault_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("fault-null-00001", "synth-ada", "synth-task", "normal")
+    original = _corrupt(path, lambda payload: payload.update({"fault": None}))
+    _assert_restore_fails(path, original, "invalid stored fault")
 
 
 def test_one_shot_fault_consumption_survives_restart(tmp_path: Path) -> None:

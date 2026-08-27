@@ -418,7 +418,10 @@ class Store:
         self._seq = seq
         self._trace = trace
         self._epoch = epoch
-        self.fault = _validate_fault_state(payload.get("fault"))
+        if "fault" not in payload:
+            self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
+        else:
+            self.fault = _validate_fault_state(payload["fault"])
         return True
 
 
@@ -438,8 +441,6 @@ def _is_int(value: object) -> bool:
 
 
 def _validate_fault_state(raw: object) -> FaultState:
-    if raw is None:
-        return FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
     if not isinstance(raw, dict):
         raise RestoreError("invalid stored fault")
     try:
