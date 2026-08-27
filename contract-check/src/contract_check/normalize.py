@@ -173,10 +173,9 @@ def _parameters(spec: dict[str, Any], op: dict[str, Any]) -> list[dict[str, Any]
             "in": location,
             "required": bool(param.get("required")),
         }
-        if location == "header":
-            schema = normalize_schema(spec, param.get("schema"))
-            if schema:
-                entry["schema"] = schema
+        schema = normalize_schema(spec, param.get("schema"))
+        if schema:
+            entry["schema"] = schema
         params.append(entry)
     return sorted(params, key=lambda item: (item["in"], item["name"]))
 

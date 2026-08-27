@@ -19,26 +19,40 @@ paths:
       responses:
         "200":
           description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
   /v1/patients:
     get:
       summary: List or search synthetic patients
       parameters:
         - in: query
           name: cohort
+          required: false
           schema:
             type: string
+            nullable: true
         - in: query
           name: site
+          required: false
           schema:
             type: string
+            nullable: true
         - in: query
           name: id
+          required: false
           schema:
             type: string
             pattern: "^synth-[a-z0-9-]+$"
+            nullable: true
       responses:
         "200":
           description: Deterministic patient corpus for the configured seed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatientList"
         "422":
           description: validation_error — search key is not a synthetic identifier
   /v1/patients/{patient_id}:
@@ -54,6 +68,10 @@ paths:
       responses:
         "200":
           description: Patient
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Patient"
         "404":
           description: Unknown patient
         "422":
@@ -71,6 +89,10 @@ paths:
       responses:
         "200":
           description: Seeded encounters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EncounterList"
         "404":
           description: Unknown patient
   /v1/encounters/{encounter_id}:
@@ -85,6 +107,10 @@ paths:
       responses:
         "200":
           description: Encounter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Encounter"
         "404":
           description: Unknown encounter
   /v1/tasks:
@@ -107,8 +133,16 @@ paths:
       responses:
         "201":
           description: Task committed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
         "200":
           description: Idempotent replay of an existing task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
         "404":
           description: Unknown patient
         "409":
@@ -131,6 +165,10 @@ paths:
       responses:
         "200":
           description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
         "404":
           description: Unknown task
   /v1/admin/events:
@@ -139,17 +177,27 @@ paths:
       parameters:
         - in: query
           name: trace_id
+          required: false
           schema:
             type: string
+            nullable: true
       responses:
         "200":
           description: Ordered events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
   /v1/admin/faults:
     get:
       summary: Read current fault injection
       responses:
         "200":
           description: Fault state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultState"
     put:
       summary: Configure deterministic failure injection
       requestBody:
@@ -161,12 +209,20 @@ paths:
       responses:
         "200":
           description: Fault state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultState"
   /v1/admin/reset:
     post:
       summary: Reset corpus, tasks, events, and faults
       responses:
         "200":
           description: Reset complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetResult"
 components:
   schemas:
     TaskCreate:
@@ -183,6 +239,111 @@ components:
           type: string
           enum: [low, normal, high]
           default: normal
+    Task:
+      type: object
+      required: [id, patient_id, title, priority, status, idempotency_key]
+      properties:
+        id:
+          type: string
+        patient_id:
+          type: string
+        title:
+          type: string
+        priority:
+          type: string
+          enum: [low, normal, high]
+        status:
+          type: string
+          const: open
+        idempotency_key:
+          type: string
+    Patient:
+      type: object
+      required: [id, cohort, site, status]
+      properties:
+        id:
+          type: string
+        cohort:
+          type: string
+        site:
+          type: string
+        status:
+          type: string
+          const: active
+    PatientList:
+      type: object
+      required: [seed, patients]
+      properties:
+        seed:
+          type: string
+        patients:
+          type: array
+          items:
+            $ref: "#/components/schemas/Patient"
+    Encounter:
+      type: object
+      required: [id, patient_id, occurred_at, kind, summary, status]
+      properties:
+        id:
+          type: string
+        patient_id:
+          type: string
+        occurred_at:
+          type: string
+        kind:
+          type: string
+          enum: [intake, follow_up, review]
+        summary:
+          type: string
+        status:
+          type: string
+          const: completed
+    EncounterList:
+      type: object
+      required: [seed, patient_id, encounters]
+      properties:
+        seed:
+          type: string
+        patient_id:
+          type: string
+        encounters:
+          type: array
+          items:
+            $ref: "#/components/schemas/Encounter"
+    Health:
+      type: object
+      required: [status, service, seed]
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: fake-pvs
+        seed:
+          type: string
+    Event:
+      type: object
+      required: [seq, trace_id, type]
+      properties:
+        seq:
+          type: integer
+        trace_id:
+          type: string
+        type:
+          type: string
+        details:
+          type: object
+    EventList:
+      type: object
+      required: [seed, events]
+      properties:
+        seed:
+          type: string
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
     FaultConfig:
       type: object
       properties:
@@ -200,3 +361,26 @@ components:
         idempotency_key:
           type: string
           nullable: true
+    FaultState:
+      type: object
+      required: [mode, delay_ms, remaining]
+      properties:
+        mode:
+          type: string
+          enum: [none, fail_before_commit, delay, ambiguous]
+        delay_ms:
+          type: integer
+        remaining:
+          type: integer
+        idempotency_key:
+          type: string
+          nullable: true
+    ResetResult:
+      type: object
+      required: [status, seed]
+      properties:
+        status:
+          type: string
+          const: reset
+        seed:
+          type: string

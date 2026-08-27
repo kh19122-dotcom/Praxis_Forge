@@ -16,6 +16,7 @@ COMPARED_DIMENSIONS = (
     "path_methods",
     "required_path",
     "idempotency_header",
+    "parameter_schema",
     "request_shape",
     "response_shape",
     "status_codes",
@@ -24,10 +25,12 @@ COMPARED_DIMENSIONS = (
 
 IGNORED_DIMENSIONS = (
     "info.title, info.description, info.version, and operation summary/description/tags",
-    "schema titles, examples, servers, and vendor extensions",
+    "schema titles, examples, servers, vendor extensions, and default values",
+    "JSON Schema keywords not retained by normalize_schema, including additionalProperties",
     "byte-identical YAML vs generated JSON",
-    "FastAPI HTTPValidationError envelope internals",
-    "error status codes present in packaged YAML but omitted from generated JSON",
+    "FastAPI HTTPValidationError envelope internals and generated 422 responses",
+    "error status codes, and extra success codes such as idempotent-replay 200, "
+    "present in packaged YAML but omitted from generated JSON",
     "numeric 0 vs 0.0 and other harmless JSON Schema representation differences",
 )
 
@@ -69,15 +72,23 @@ def _public_op(op: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     request = op.get("request")
     responses = op.get("response_shapes") or {}
+    success = {
+        code: shape
+        for code, shape in responses.items()
+        if str(code).startswith("2")
+    }
     return {
+        "parameters": op.get("parameters") or [],
         "idempotency_key": op.get("idempotency_key"),
         "request_required": (request or {}).get("required") if request else None,
         "request_required_fields": (request or {}).get("required_fields") if request else [],
         "request_basic": (request or {}).get("basic") if request else None,
+        "request_schema": (request or {}).get("schema") if request else None,
         "status_codes": op.get("status_codes") or [],
         "response_required_fields": {
-            code: shape.get("required_fields") or []
-            for code, shape in responses.items()
-            if code.startswith("2")
+            code: shape.get("required_fields") or [] for code, shape in success.items()
+        },
+        "response_schemas": {
+            code: shape.get("schema") for code, shape in success.items()
         },
     }

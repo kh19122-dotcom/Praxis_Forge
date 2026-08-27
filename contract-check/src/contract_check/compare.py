@@ -151,6 +151,8 @@ def compare_service(
                 )
             )
 
+    mismatches.extend(_yaml_json_schema_diffs(service, snapshot))
+
     actual_digest = digest_snapshot(snapshot)
     if expected_record is None:
         mismatches.append(
@@ -182,6 +184,66 @@ def compare_service(
             )
 
     return snapshot, mismatches
+
+
+def _yaml_json_schema_diffs(service: str, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    diffs: list[dict[str, Any]] = []
+    operations = snapshot.get("operations") or {}
+    for key, operation in operations.items():
+        yaml_op = operation.get("yaml")
+        json_op = operation.get("json")
+        if not yaml_op or not json_op:
+            continue
+        method, _, path = key.partition(" ")
+        if (yaml_op.get("parameters") or []) != (json_op.get("parameters") or []):
+            diffs.append(
+                _mismatch(
+                    service,
+                    "parameter_schema",
+                    path=path,
+                    method=method,
+                    detail=(
+                        "path/query/header parameter contracts differ between "
+                        "packaged YAML and generated JSON"
+                    ),
+                    expected=yaml_op.get("parameters") or [],
+                    actual=json_op.get("parameters") or [],
+                )
+            )
+        if yaml_op.get("request_schema") != json_op.get("request_schema"):
+            diffs.append(
+                _mismatch(
+                    service,
+                    "request_shape",
+                    path=path,
+                    method=method,
+                    detail=(
+                        "normalized JSON request schema differs between "
+                        "packaged YAML and generated JSON"
+                    ),
+                    expected=yaml_op.get("request_schema"),
+                    actual=json_op.get("request_schema"),
+                )
+            )
+        yaml_responses = yaml_op.get("response_schemas") or {}
+        json_responses = json_op.get("response_schemas") or {}
+        for code in sorted(set(yaml_responses) & set(json_responses)):
+            if yaml_responses.get(code) != json_responses.get(code):
+                diffs.append(
+                    _mismatch(
+                        service,
+                        "response_shape",
+                        path=path,
+                        method=method,
+                        detail=(
+                            f"normalized JSON {code} response schema differs between "
+                            "packaged YAML and generated JSON"
+                        ),
+                        expected=yaml_responses.get(code),
+                        actual=json_responses.get(code),
+                    )
+                )
+    return diffs
 
 
 def _fingerprint_diffs(
@@ -233,10 +295,27 @@ def _fingerprint_diffs(
                         actual=act_op.get("idempotency_key"),
                     )
                 )
-            if (exp_op.get("request_required_fields") or []) != (
-                act_op.get("request_required_fields") or []
-            ) or (exp_op.get("request_basic") or None) != (
-                act_op.get("request_basic") or None
+            if (exp_op.get("parameters") or []) != (act_op.get("parameters") or []):
+                diffs.append(
+                    _mismatch(
+                        service,
+                        "parameter_schema",
+                        path=path,
+                        method=method,
+                        detail=(
+                            f"{source} parameter contracts drifted from committed fingerprint"
+                        ),
+                        expected=exp_op.get("parameters") or [],
+                        actual=act_op.get("parameters") or [],
+                    )
+                )
+            if (
+                (exp_op.get("request_required_fields") or [])
+                != (act_op.get("request_required_fields") or [])
+                or (exp_op.get("request_basic") or None)
+                != (act_op.get("request_basic") or None)
+                or (exp_op.get("request_schema") or None)
+                != (act_op.get("request_schema") or None)
             ):
                 diffs.append(
                     _mismatch(
@@ -245,15 +324,17 @@ def _fingerprint_diffs(
                         path=path,
                         method=method,
                         detail=(
-                            f"{source} request shape drifted from committed fingerprint"
+                            f"{source} request schema drifted from committed fingerprint"
                         ),
                         expected={
                             "required_fields": exp_op.get("request_required_fields"),
                             "basic": exp_op.get("request_basic"),
+                            "schema": exp_op.get("request_schema"),
                         },
                         actual={
                             "required_fields": act_op.get("request_required_fields"),
                             "basic": act_op.get("request_basic"),
+                            "schema": act_op.get("request_schema"),
                         },
                     )
                 )
@@ -274,6 +355,8 @@ def _fingerprint_diffs(
                 )
             if (exp_op.get("response_required_fields") or {}) != (
                 act_op.get("response_required_fields") or {}
+            ) or (exp_op.get("response_schemas") or {}) != (
+                act_op.get("response_schemas") or {}
             ):
                 diffs.append(
                     _mismatch(
@@ -282,11 +365,16 @@ def _fingerprint_diffs(
                         path=path,
                         method=method,
                         detail=(
-                            f"{source} response required fields drifted "
-                            "from committed fingerprint"
+                            f"{source} response schema drifted from committed fingerprint"
                         ),
-                        expected=exp_op.get("response_required_fields"),
-                        actual=act_op.get("response_required_fields"),
+                        expected={
+                            "required_fields": exp_op.get("response_required_fields"),
+                            "schemas": exp_op.get("response_schemas"),
+                        },
+                        actual={
+                            "required_fields": act_op.get("response_required_fields"),
+                            "schemas": act_op.get("response_schemas"),
+                        },
                     )
                 )
     return diffs
