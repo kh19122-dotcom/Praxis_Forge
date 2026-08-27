@@ -246,6 +246,7 @@ class Store:
                 remaining=remaining,
                 idempotency_key=current.idempotency_key if remaining > 0 else None,
             )
+            self._persist_locked()
             return current
 
     def list_patients(
@@ -398,6 +399,7 @@ class Store:
             "tasks": self.tasks,
             "tasks_by_key": self.tasks_by_key,
             "events": self.events,
+            "fault": self.fault.model_dump(),
         }
 
     def _restore_locked(self) -> bool:
@@ -416,6 +418,7 @@ class Store:
         self._seq = seq
         self._trace = trace
         self._epoch = epoch
+        self.fault = _validate_fault_state(payload.get("fault"))
         return True
 
 
@@ -432,6 +435,17 @@ def _parse_trace_id(trace_id: str) -> tuple[int, int] | None:
 
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_fault_state(raw: object) -> FaultState:
+    if raw is None:
+        return FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
+    if not isinstance(raw, dict):
+        raise RestoreError("invalid stored fault")
+    try:
+        return FaultState.model_validate(raw)
+    except ValidationError as exc:
+        raise RestoreError("invalid stored fault") from exc
 
 
 def _validate_pvs_snapshot(

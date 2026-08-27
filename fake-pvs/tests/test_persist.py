@@ -579,9 +579,14 @@ def test_fault_configure_persist_failpoint_leaves_old_or_complete_state(tmp_path
     path = str(tmp_path / "pvs.json")
     first = Store(Settings(seed="obj-002", state_path=path))
     created = first.create_task("fault-atomic-0001", "synth-ada", "synth-task", "normal")
+    first.configure_fault(
+        FaultConfig(mode="delay", delay_ms=17, remaining=2, idempotency_key="synth-old-fault")
+    )
     before = Path(path).read_text(encoding="utf-8")
     payload = json.loads(before)
-    assert payload["trace"] == 1
+    assert payload["trace"] == 2
+    assert payload["fault"]["mode"] == "delay"
+    assert payload["fault"]["remaining"] == 2
     first.arm_failpoint("persist")
     with pytest.raises(PersistenceCrash):
         first.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
@@ -589,39 +594,56 @@ def test_fault_configure_persist_failpoint_leaves_old_or_complete_state(tmp_path
 
     restored = Store(Settings(seed="obj-002", state_path=path))
     assert restored.get_task(created["task"]["id"]) is not None
-    assert restored.fault.mode == "none"
-    assert restored.fault.remaining == 0
-    types = [event["type"] for event in restored.events]
-    assert "fault_configured" not in types
+    assert restored.fault.mode == "delay"
+    assert restored.fault.delay_ms == 17
+    assert restored.fault.remaining == 2
+    assert restored.fault.idempotency_key == "synth-old-fault"
+    traces = [
+        event["trace_id"]
+        for event in restored.events
+        if event["type"] == "fault_configured"
+    ]
+    assert traces == ["tr_000001_000002"]
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert payload["trace"] == 1
-    assert max(int(event["trace_id"].rsplit("_", 1)[1]) for event in payload["events"]) == 1
+    assert payload["trace"] == 2
 
     complete = Store(Settings(seed="obj-002", state_path=path))
     complete.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert payload["trace"] == 2
-    assert any(event["type"] == "fault_configured" for event in payload["events"])
+    assert payload["trace"] == 3
+    assert payload["fault"]["mode"] == "fail_before_commit"
+    assert payload["fault"]["remaining"] == 1
     restarted = Store(Settings(seed="obj-002", state_path=path))
-    assert any(event["type"] == "fault_configured" for event in restarted.events)
+    assert restarted.fault.mode == "fail_before_commit"
+    assert restarted.fault.remaining == 1
     traces = [
         event["trace_id"]
         for event in restarted.events
         if event["type"] == "fault_configured"
     ]
-    assert traces == ["tr_000001_000002"]
+    assert traces == ["tr_000001_000002", "tr_000001_000003"]
 
 
 def test_fault_configure_survives_immediate_post_replace_restart(tmp_path: Path) -> None:
     path = str(tmp_path / "pvs.json")
     first = Store(Settings(seed="obj-002", state_path=path))
     first.create_task("fault-post-replace-01", "synth-ada", "synth-task", "normal")
-    first.configure_fault(FaultConfig(mode="delay", remaining=1))
+    first.configure_fault(
+        FaultConfig(mode="delay", delay_ms=17, remaining=2, idempotency_key="synth-keep-fault")
+    )
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     assert payload["trace"] == 2
-    assert any(event["type"] == "fault_configured" for event in payload["events"])
+    assert payload["fault"] == {
+        "mode": "delay",
+        "delay_ms": 17,
+        "remaining": 2,
+        "idempotency_key": "synth-keep-fault",
+    }
     restarted = Store(Settings(seed="obj-002", state_path=path))
-    assert restarted.fault.mode == "none"
+    assert restarted.fault.mode == "delay"
+    assert restarted.fault.delay_ms == 17
+    assert restarted.fault.remaining == 2
+    assert restarted.fault.idempotency_key == "synth-keep-fault"
     traces = [
         event["trace_id"]
         for event in restarted.events
@@ -630,8 +652,15 @@ def test_fault_configure_survives_immediate_post_replace_restart(tmp_path: Path)
     assert traces == ["tr_000001_000002"]
     allocated = restarted.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
     assert allocated.mode == "fail_before_commit"
-    after = [event["trace_id"] for event in restarted.events if event["type"] == "fault_configured"]
-    assert after == ["tr_000001_000002", "tr_000001_000003"]
+    after = Store(Settings(seed="obj-002", state_path=path))
+    assert after.fault.mode == "fail_before_commit"
+    assert after.fault.remaining == 1
+    traces = [
+        event["trace_id"]
+        for event in after.events
+        if event["type"] == "fault_configured"
+    ]
+    assert traces == ["tr_000001_000002", "tr_000001_000003"]
 
 
 def test_fault_configure_memory_failpoint_does_not_advance_durable_trace(tmp_path: Path) -> None:
@@ -658,4 +687,63 @@ def test_reduced_trace_counter_below_fault_marker_fails_closed(tmp_path: Path) -
     assert any(event["type"] == "fault_configured" for event in restored.events)
     original = _corrupt(path, lambda payload: payload.update({"trace": 1}))
     _assert_restore_fails(path, original, "counters")
+
+
+def test_absent_fault_field_restores_historical_default(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("fault-absent-0001", "synth-ada", "synth-task", "normal")
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload.pop("fault", None)
+    Path(path).write_text(json.dumps(payload), encoding="utf-8")
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.get_task(created["task"]["id"]) is not None
+    assert restored.fault.mode == "none"
+    assert restored.fault.remaining == 0
+    assert restored.fault.delay_ms == 50
+    assert "fault" not in json.loads(Path(path).read_text(encoding="utf-8"))
+    restored.configure_fault(FaultConfig(mode="none"))
+    rewritten = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert rewritten["fault"]["mode"] == "none"
+    assert rewritten["fault"]["remaining"] == 0
+
+
+def test_one_shot_fault_consumption_survives_restart(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.configure_fault(FaultConfig(mode="delay", delay_ms=17, remaining=1))
+    consumed = first.consume_fault("synth-one-shot")
+    assert consumed.mode == "delay"
+    assert first.fault.mode == "none"
+    assert first.fault.remaining == 0
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.fault.mode == "none"
+    assert restored.fault.remaining == 0
+
+
+def test_partial_fault_consumption_survives_restart(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.configure_fault(FaultConfig(mode="delay", delay_ms=17, remaining=2))
+    consumed = first.consume_fault("synth-partial")
+    assert consumed.remaining == 2
+    assert first.fault.remaining == 1
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.fault.mode == "delay"
+    assert restored.fault.remaining == 1
+
+
+def test_idempotency_filtered_fault_is_not_consumed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.configure_fault(
+        FaultConfig(mode="delay", delay_ms=17, remaining=2, idempotency_key="synth-key-a")
+    )
+    skipped = first.consume_fault("synth-key-b")
+    assert skipped.mode == "none"
+    assert first.fault.remaining == 2
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.fault.mode == "delay"
+    assert restored.fault.remaining == 2
+    assert restored.fault.idempotency_key == "synth-key-a"
 
