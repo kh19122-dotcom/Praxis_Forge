@@ -159,12 +159,37 @@ def _check_ci(errors: list[str]) -> None:
                 _error(errors, f"CI container-test matrix missing {service}")
     if "linux/amd64" not in text or "linux/arm64" not in text:
         _error(errors, "CI must smoke-build linux/amd64 and linux/arm64")
+    _check_image_build_smoke_tags(text, errors)
     if "scripts/validate_locks.py" not in text:
         _error(errors, "CI must run scripts/validate_locks.py")
     if "scripts/verify_installed_versions.py" not in text:
         _error(errors, "CI must run scripts/verify_installed_versions.py")
     if "pip install --upgrade pip" in text:
         _error(errors, "CI must not run an unbounded pip upgrade")
+
+
+
+def _check_image_build_smoke_tags(text: str, errors: list[str]) -> None:
+    if "platform: linux/amd64" not in text or "platform: linux/arm64" not in text:
+        _error(errors, "image-build-smoke must keep full platform values linux/amd64 and linux/arm64")
+    if "arch: amd64" not in text or "arch: arm64" not in text:
+        _error(errors, "image-build-smoke must define tag-safe arch labels amd64 and arm64")
+    if "--platform ${{ matrix.platform }}" not in text:
+        _error(errors, "image-build-smoke must pass matrix.platform to Buildx and docker run")
+    if "praxis-forge/${{ matrix.component }}:test-${{ matrix.arch }}" not in text:
+        _error(errors, "image-build-smoke tags must use tag-safe matrix.arch")
+    if ":test-${{ matrix.platform }}" in text:
+        _error(errors, "image-build-smoke must not interpolate matrix.platform into a Docker tag")
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if "${{ matrix.platform }}" not in stripped:
+            continue
+        uses_tag = stripped.startswith(("-t ", "--image ")) or " --image " in stripped
+        if uses_tag:
+            _error(
+                errors,
+                f"CI line {lineno} interpolates matrix.platform into a Docker tag",
+            )
 
 
 def _check_lock_freshness(errors: list[str]) -> None:

@@ -163,7 +163,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64]
         component:
           - fake-booking
           - fake-pvs
@@ -171,6 +170,12 @@ jobs:
           - scenario-runner
           - contract-check
           - external-client
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -181,7 +186,7 @@ jobs:
             --platform ${{ matrix.platform }} \
             --target test \
             --load \
-            -t praxis-forge/${{ matrix.component }}:test-${{ matrix.platform }} \
+            -t praxis-forge/${{ matrix.component }}:test-${{ matrix.arch }} \
             ./${{ matrix.component }}
       - name: Verify installed versions against the committed lock
         run: |
@@ -189,7 +194,7 @@ jobs:
             --skip-build \
             --target test \
             --platform ${{ matrix.platform }} \
-            --image praxis-forge/${{ matrix.component }}:test-${{ matrix.platform }} \
+            --image praxis-forge/${{ matrix.component }}:test-${{ matrix.arch }} \
             ${{ matrix.component }}
       - name: Report architecture coverage
         run: |
