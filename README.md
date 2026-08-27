@@ -363,6 +363,10 @@ curl -s -X POST http://127.0.0.1:8093/v1/admin/reset
 
 `remaining` is the number of matching proxied requests that consume the fault. Optional `method`, `path`, and `idempotency_key` scope the fault. `/healthz` on the data plane is never consumed.
 
+Request bodies are buffered. HTTP/1.1 `Content-Length` bodies are forwarded unchanged. A valid `Transfer-Encoding: chunked` request is decoded before upstream forwarding: the proxy consumes chunk framing, extensions, and trailers, then sends the exact decoded entity bytes. It does not forward `Transfer-Encoding` or the client's original `Content-Length`; `httpx` frames the decoded body normally. Method, request target/query, ordinary headers, and `Idempotency-Key` are preserved.
+
+Ambiguous or unsupported framing is a client error (`400 invalid_body`) and never reaches upstream: `Content-Length` plus `Transfer-Encoding`, malformed chunk-size syntax, invalid chunk delimiters, premature EOF, and transfer codings other than `chunked`. Those failures do not consume an armed transport fault and do not record upstream-completed evidence. Admin `PUT /v1/admin/faults` uses the same body reader.
+
 ### Tests
 
 Docker (from the repository root):
@@ -662,15 +666,21 @@ Compared dimensions:
 - path + HTTP method set
 - required scenario-runner public/admin operations
 - required `Idempotency-Key` on `POST /v1/bookings` and `POST /v1/tasks`
-- representative request required fields / basic schema shape
-- documented YAML status codes and representative JSON success-response required fields
+- public path, query, and header parameter contracts (name, location, requiredness, and normalized schema)
+- normalized JSON request schemas (required-field / basic-shape summaries remain as convenience fields)
+- normalized JSON 2xx response schemas, compared between packaged YAML and runtime JSON where both exist
+- documented YAML status codes
 - committed normalized fingerprint (`contract-check/src/contract_check/data/fingerprints.json`)
+
+This is not full OpenAPI semantic equivalence. Only the dimensions listed above enter the public snapshot and fingerprint.
 
 Intentionally ignored:
 
 - OpenAPI `info.title` / `info.description` / `info.version`, plus summary/tag/example/server text
-- FastAPI `HTTPValidationError` envelope internals
-- error status codes present in packaged YAML but omitted from generated JSON
+- schema titles, examples, servers, vendor extensions, and default values
+- JSON Schema keywords not retained by `normalize_schema`, including `additionalProperties`
+- FastAPI `HTTPValidationError` envelope internals and generated 422 responses
+- error status codes, and extra success codes such as idempotent-replay 200, present in packaged YAML but omitted from generated JSON
 - harmless JSON Schema representation differences (`0` vs `0.0`)
 
 A mismatch prints one JSON object to stdout and exits `1`. Exit `0` means both services passed.
@@ -701,18 +711,19 @@ The defaults are `http://127.0.0.1:8080` and `http://127.0.0.1:8081`. Override w
 
 ### Intentional contract changes
 
-After a deliberate HTTP-surface change (path/method, idempotency header, request/response required fields, or documented status codes):
+After a deliberate HTTP-surface change (path/method, parameter schema, request/response schema, idempotency header, or documented status codes):
 
-1. Update the packaged YAML and the FastAPI handlers together.
-2. Refresh the committed fingerprint from the host against live loopback ports (the Compose service cannot write the repo file):
+1. Update the packaged YAML to document the current runtime HTTP contract. Do not change Booking/PVS runtime behavior merely to make YAML match generated JSON.
+2. Confirm YAML-vs-runtime comparison is green for parameters, request schemas, and JSON 2xx response schemas.
+3. Refresh the committed fingerprint from the host against live loopback ports (the Compose service cannot write the repo file):
 
 ```bash
 contract-check --update-fingerprint
 ```
 
-3. Review the fingerprint diff in the same PR as the contract change. Do not change simulator APIs merely to make YAML and generated JSON textually identical.
+4. Review the fingerprint digest **and** snapshot metadata in the same PR. Do not change only a digest while leaving a stale snapshot. Fingerprint changes are expected when snapshot semantics or documented schemas are intentionally strengthened.
 
-The packaged fingerprint is `schema: praxis-forge.contract-fingerprint.v1`. Regenerating it with a fixed live contract is deterministic.
+The packaged fingerprint is `schema: praxis-forge.contract-fingerprint.v1`. Regenerating it with a fixed live contract is deterministic. The digest is a hash of the normalized snapshot, not a claim of full OpenAPI equivalence.
 
 ### Tests
 

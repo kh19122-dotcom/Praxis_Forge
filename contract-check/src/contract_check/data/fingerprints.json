@@ -3,7 +3,7 @@
   "schema": "praxis-forge.contract-fingerprint.v1",
   "services": {
     "fake-booking": {
-      "digest": "c5315b667a9a64c3a19d5447bbb5f6a93dae333f9f53f26659682bce55fc224f",
+      "digest": "eddf85d9718001273e15de229b1cf1004b0167dae9e4cde70fda532aad0e23e4",
       "snapshot": {
         "idempotent_write": "POST /v1/bookings",
         "json_operations": [
@@ -20,15 +20,40 @@
           "GET /healthz": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "seed",
                   "service",
                   "status"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "service": {
+                      "const": "fake-booking",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "ok",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "service",
+                    "status"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200"
@@ -38,10 +63,41 @@
             "path": "/healthz",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "seed",
+                  "service",
+                  "status"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "service": {
+                      "const": "fake-booking",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "ok",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "service",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -50,14 +106,67 @@
           "GET /v1/admin/events": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "trace_id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "events",
                   "seed"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "events": {
+                      "items": {
+                        "properties": {
+                          "details": {
+                            "properties": {},
+                            "required": [],
+                            "type": "object"
+                          },
+                          "seq": {
+                            "type": "integer"
+                          },
+                          "trace_id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "seq",
+                          "trace_id",
+                          "type"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -68,10 +177,68 @@
             "path": "/v1/admin/events",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "trace_id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "events",
+                  "seed"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "events": {
+                      "items": {
+                        "properties": {
+                          "details": {
+                            "properties": {},
+                            "required": [],
+                            "type": "object"
+                          },
+                          "seq": {
+                            "type": "integer"
+                          },
+                          "trace_id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "seq",
+                          "trace_id",
+                          "type"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -80,15 +247,48 @@
           "GET /v1/admin/faults": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "delay_ms",
                   "mode",
                   "remaining"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200"
@@ -98,10 +298,49 @@
             "path": "/v1/admin/faults",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "delay_ms",
+                  "mode",
+                  "remaining"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -110,9 +349,20 @@
           "GET /v1/bookings/{booking_id}": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "booking_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "end",
@@ -125,6 +375,48 @@
                   "status"
                 ]
               },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "end": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_ref": {
+                      "type": "string"
+                    },
+                    "resource_id": {
+                      "type": "string"
+                    },
+                    "slot_id": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "confirmed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "end",
+                    "id",
+                    "idempotency_key",
+                    "patient_ref",
+                    "resource_id",
+                    "slot_id",
+                    "start",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "422"
@@ -134,10 +426,74 @@
             "path": "/v1/bookings/{booking_id}",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "booking_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "end",
+                  "id",
+                  "idempotency_key",
+                  "patient_ref",
+                  "resource_id",
+                  "slot_id",
+                  "start",
+                  "status"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "end": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_ref": {
+                      "type": "string"
+                    },
+                    "resource_id": {
+                      "type": "string"
+                    },
+                    "slot_id": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "confirmed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "end",
+                    "id",
+                    "idempotency_key",
+                    "patient_ref",
+                    "resource_id",
+                    "slot_id",
+                    "start",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "404"
@@ -147,14 +503,78 @@
           "GET /v1/slots": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "available",
+                  "required": false,
+                  "schema": {
+                    "type": "boolean"
+                  }
+                },
+                {
+                  "in": "query",
+                  "name": "resource_id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "seed",
                   "slots"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "slots": {
+                      "items": {
+                        "properties": {
+                          "available": {
+                            "type": "boolean"
+                          },
+                          "end": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "resource_id": {
+                            "type": "string"
+                          },
+                          "start": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "available",
+                          "end",
+                          "id",
+                          "resource_id",
+                          "start"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "slots"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -165,10 +585,79 @@
             "path": "/v1/slots",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "available",
+                  "required": false,
+                  "schema": {
+                    "type": "boolean"
+                  }
+                },
+                {
+                  "in": "query",
+                  "name": "resource_id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "seed",
+                  "slots"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "slots": {
+                      "items": {
+                        "properties": {
+                          "available": {
+                            "type": "boolean"
+                          },
+                          "end": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "resource_id": {
+                            "type": "string"
+                          },
+                          "start": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "available",
+                          "end",
+                          "id",
+                          "resource_id",
+                          "start"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "slots"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -177,14 +666,34 @@
           "POST /v1/admin/reset": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "seed",
                   "status"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "reset",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "status"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200"
@@ -194,10 +703,35 @@
             "path": "/v1/admin/reset",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "seed",
+                  "status"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "reset",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -213,6 +747,18 @@
                   "type": "string"
                 }
               },
+              "parameters": [
+                {
+                  "in": "header",
+                  "name": "Idempotency-Key",
+                  "required": true,
+                  "schema": {
+                    "maxLength": 128,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": {
                 "properties": {
                   "patient_ref": {
@@ -234,6 +780,23 @@
                 "patient_ref",
                 "slot_id"
               ],
+              "request_schema": {
+                "properties": {
+                  "patient_ref": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  },
+                  "slot_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "patient_ref",
+                  "slot_id"
+                ],
+                "type": "object"
+              },
               "response_required_fields": {
                 "201": [
                   "end",
@@ -245,6 +808,48 @@
                   "start",
                   "status"
                 ]
+              },
+              "response_schemas": {
+                "201": {
+                  "properties": {
+                    "end": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_ref": {
+                      "type": "string"
+                    },
+                    "resource_id": {
+                      "type": "string"
+                    },
+                    "slot_id": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "confirmed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "end",
+                    "id",
+                    "idempotency_key",
+                    "patient_ref",
+                    "resource_id",
+                    "slot_id",
+                    "start",
+                    "status"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "201",
@@ -262,6 +867,18 @@
                   "type": "string"
                 }
               },
+              "parameters": [
+                {
+                  "in": "header",
+                  "name": "Idempotency-Key",
+                  "required": true,
+                  "schema": {
+                    "maxLength": 128,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": {
                 "properties": {
                   "patient_ref": {
@@ -283,7 +900,127 @@
                 "patient_ref",
                 "slot_id"
               ],
-              "response_required_fields": {},
+              "request_schema": {
+                "properties": {
+                  "patient_ref": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  },
+                  "slot_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "patient_ref",
+                  "slot_id"
+                ],
+                "type": "object"
+              },
+              "response_required_fields": {
+                "200": [
+                  "end",
+                  "id",
+                  "idempotency_key",
+                  "patient_ref",
+                  "resource_id",
+                  "slot_id",
+                  "start",
+                  "status"
+                ],
+                "201": [
+                  "end",
+                  "id",
+                  "idempotency_key",
+                  "patient_ref",
+                  "resource_id",
+                  "slot_id",
+                  "start",
+                  "status"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "end": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_ref": {
+                      "type": "string"
+                    },
+                    "resource_id": {
+                      "type": "string"
+                    },
+                    "slot_id": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "confirmed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "end",
+                    "id",
+                    "idempotency_key",
+                    "patient_ref",
+                    "resource_id",
+                    "slot_id",
+                    "start",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                "201": {
+                  "properties": {
+                    "end": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_ref": {
+                      "type": "string"
+                    },
+                    "resource_id": {
+                      "type": "string"
+                    },
+                    "slot_id": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "confirmed",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "end",
+                    "id",
+                    "idempotency_key",
+                    "patient_ref",
+                    "resource_id",
+                    "slot_id",
+                    "start",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "201",
@@ -296,6 +1033,7 @@
           "PUT /v1/admin/faults": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": {
                 "properties": {
                   "delay_ms": {
@@ -323,12 +1061,72 @@
               },
               "request_required": true,
               "request_required_fields": [],
+              "request_schema": {
+                "properties": {
+                  "delay_ms": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "ambiguous",
+                      "delay",
+                      "fail_before_commit",
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  "remaining": {
+                    "maximum": 100,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
               "response_required_fields": {
                 "200": [
                   "delay_ms",
                   "mode",
                   "remaining"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -339,6 +1137,7 @@
             "path": "/v1/admin/faults",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": {
                 "properties": {
                   "delay_ms": {
@@ -366,7 +1165,73 @@
               },
               "request_required": true,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": {
+                "properties": {
+                  "delay_ms": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "ambiguous",
+                      "delay",
+                      "fail_before_commit",
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  "remaining": {
+                    "maximum": 100,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "response_required_fields": {
+                "200": [
+                  "delay_ms",
+                  "mode",
+                  "remaining"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -396,7 +1261,7 @@
       }
     },
     "fake-pvs": {
-      "digest": "e61ba4e76906440c9537b24f45d6d2b41afb0b3828d51706411647d11906d3f0",
+      "digest": "e495424cdb27f7ea8eb8464b522f835b6423c0fb380a11fe2f54fea993dc7ce1",
       "snapshot": {
         "idempotent_write": "POST /v1/tasks",
         "json_operations": [
@@ -416,15 +1281,40 @@
           "GET /healthz": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "seed",
                   "service",
                   "status"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "service": {
+                      "const": "fake-pvs",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "ok",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "service",
+                    "status"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200"
@@ -434,10 +1324,41 @@
             "path": "/healthz",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "seed",
+                  "service",
+                  "status"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "service": {
+                      "const": "fake-pvs",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "ok",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "service",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -446,14 +1367,67 @@
           "GET /v1/admin/events": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "trace_id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "events",
                   "seed"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "events": {
+                      "items": {
+                        "properties": {
+                          "details": {
+                            "properties": {},
+                            "required": [],
+                            "type": "object"
+                          },
+                          "seq": {
+                            "type": "integer"
+                          },
+                          "trace_id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "seq",
+                          "trace_id",
+                          "type"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -464,10 +1438,68 @@
             "path": "/v1/admin/events",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "trace_id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "events",
+                  "seed"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "events": {
+                      "items": {
+                        "properties": {
+                          "details": {
+                            "properties": {},
+                            "required": [],
+                            "type": "object"
+                          },
+                          "seq": {
+                            "type": "integer"
+                          },
+                          "trace_id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "seq",
+                          "trace_id",
+                          "type"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -476,15 +1508,48 @@
           "GET /v1/admin/faults": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "delay_ms",
                   "mode",
                   "remaining"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200"
@@ -494,10 +1559,49 @@
             "path": "/v1/admin/faults",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "delay_ms",
+                  "mode",
+                  "remaining"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -506,9 +1610,20 @@
           "GET /v1/encounters/{encounter_id}": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "encounter_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "id",
@@ -519,6 +1634,45 @@
                   "summary"
                 ]
               },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "follow_up",
+                        "intake",
+                        "review"
+                      ],
+                      "type": "string"
+                    },
+                    "occurred_at": {
+                      "type": "string"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "completed",
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "occurred_at",
+                    "patient_id",
+                    "status",
+                    "summary"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "422"
@@ -528,10 +1682,69 @@
             "path": "/v1/encounters/{encounter_id}",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "encounter_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "id",
+                  "kind",
+                  "occurred_at",
+                  "patient_id",
+                  "status",
+                  "summary"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "follow_up",
+                        "intake",
+                        "review"
+                      ],
+                      "type": "string"
+                    },
+                    "occurred_at": {
+                      "type": "string"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "completed",
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "occurred_at",
+                    "patient_id",
+                    "status",
+                    "summary"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "404"
@@ -541,14 +1754,86 @@
           "GET /v1/patients": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "cohort",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                {
+                  "in": "query",
+                  "name": "id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                },
+                {
+                  "in": "query",
+                  "name": "site",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "patients",
                   "seed"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "patients": {
+                      "items": {
+                        "properties": {
+                          "cohort": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "site": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "active",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "cohort",
+                          "id",
+                          "site",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "patients",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -559,10 +1844,87 @@
             "path": "/v1/patients",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "query",
+                  "name": "cohort",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                {
+                  "in": "query",
+                  "name": "id",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                },
+                {
+                  "in": "query",
+                  "name": "site",
+                  "required": false,
+                  "schema": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "patients",
+                  "seed"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "patients": {
+                      "items": {
+                        "properties": {
+                          "cohort": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "site": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "active",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "cohort",
+                          "id",
+                          "site",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "patients",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "422"
@@ -572,9 +1934,21 @@
           "GET /v1/patients/{patient_id}": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "patient_id",
+                  "required": true,
+                  "schema": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "cohort",
@@ -582,6 +1956,32 @@
                   "site",
                   "status"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "cohort": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "site": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "active",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cohort",
+                    "id",
+                    "site",
+                    "status"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -592,10 +1992,55 @@
             "path": "/v1/patients/{patient_id}",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "patient_id",
+                  "required": true,
+                  "schema": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "cohort",
+                  "id",
+                  "site",
+                  "status"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "cohort": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "site": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "active",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cohort",
+                    "id",
+                    "site",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "404",
@@ -606,15 +2051,85 @@
           "GET /v1/patients/{patient_id}/encounters": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "patient_id",
+                  "required": true,
+                  "schema": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "encounters",
                   "patient_id",
                   "seed"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "encounters": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "follow_up",
+                              "intake",
+                              "review"
+                            ],
+                            "type": "string"
+                          },
+                          "occurred_at": {
+                            "type": "string"
+                          },
+                          "patient_id": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "completed",
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "occurred_at",
+                          "patient_id",
+                          "status",
+                          "summary"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "encounters",
+                    "patient_id",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -625,10 +2140,86 @@
             "path": "/v1/patients/{patient_id}/encounters",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "patient_id",
+                  "required": true,
+                  "schema": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "encounters",
+                  "patient_id",
+                  "seed"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "encounters": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "follow_up",
+                              "intake",
+                              "review"
+                            ],
+                            "type": "string"
+                          },
+                          "occurred_at": {
+                            "type": "string"
+                          },
+                          "patient_id": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "const": "completed",
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "occurred_at",
+                          "patient_id",
+                          "status",
+                          "summary"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "seed": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "encounters",
+                    "patient_id",
+                    "seed"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "404"
@@ -638,9 +2229,20 @@
           "GET /v1/tasks/{task_id}": {
             "json": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "task_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "id",
@@ -651,6 +2253,45 @@
                   "title"
                 ]
               },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "enum": [
+                        "high",
+                        "low",
+                        "normal"
+                      ],
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "open",
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "idempotency_key",
+                    "patient_id",
+                    "priority",
+                    "status",
+                    "title"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "422"
@@ -660,10 +2301,69 @@
             "path": "/v1/tasks/{task_id}",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "task_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "id",
+                  "idempotency_key",
+                  "patient_id",
+                  "priority",
+                  "status",
+                  "title"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "enum": [
+                        "high",
+                        "low",
+                        "normal"
+                      ],
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "open",
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "idempotency_key",
+                    "patient_id",
+                    "priority",
+                    "status",
+                    "title"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "404"
@@ -673,14 +2373,34 @@
           "POST /v1/admin/reset": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
+              "request_schema": null,
               "response_required_fields": {
                 "200": [
                   "seed",
                   "status"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "reset",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "status"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200"
@@ -690,10 +2410,35 @@
             "path": "/v1/admin/reset",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": null,
               "request_required": null,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "seed",
+                  "status"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "seed": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "reset",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "seed",
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]
@@ -709,6 +2454,18 @@
                   "type": "string"
                 }
               },
+              "parameters": [
+                {
+                  "in": "header",
+                  "name": "Idempotency-Key",
+                  "required": true,
+                  "schema": {
+                    "maxLength": 128,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": {
                 "properties": {
                   "patient_id": {
@@ -739,6 +2496,31 @@
                 "patient_id",
                 "title"
               ],
+              "request_schema": {
+                "properties": {
+                  "patient_id": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  },
+                  "priority": {
+                    "enum": [
+                      "high",
+                      "low",
+                      "normal"
+                    ],
+                    "type": "string"
+                  },
+                  "title": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "patient_id",
+                  "title"
+                ],
+                "type": "object"
+              },
               "response_required_fields": {
                 "201": [
                   "id",
@@ -748,6 +2530,45 @@
                   "status",
                   "title"
                 ]
+              },
+              "response_schemas": {
+                "201": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "enum": [
+                        "high",
+                        "low",
+                        "normal"
+                      ],
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "open",
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "idempotency_key",
+                    "patient_id",
+                    "priority",
+                    "status",
+                    "title"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "201",
@@ -765,6 +2586,18 @@
                   "type": "string"
                 }
               },
+              "parameters": [
+                {
+                  "in": "header",
+                  "name": "Idempotency-Key",
+                  "required": true,
+                  "schema": {
+                    "maxLength": 128,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                }
+              ],
               "request_basic": {
                 "properties": {
                   "patient_id": {
@@ -795,7 +2628,125 @@
                 "patient_id",
                 "title"
               ],
-              "response_required_fields": {},
+              "request_schema": {
+                "properties": {
+                  "patient_id": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  },
+                  "priority": {
+                    "enum": [
+                      "high",
+                      "low",
+                      "normal"
+                    ],
+                    "type": "string"
+                  },
+                  "title": {
+                    "pattern": "^synth-[a-z0-9-]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "patient_id",
+                  "title"
+                ],
+                "type": "object"
+              },
+              "response_required_fields": {
+                "200": [
+                  "id",
+                  "idempotency_key",
+                  "patient_id",
+                  "priority",
+                  "status",
+                  "title"
+                ],
+                "201": [
+                  "id",
+                  "idempotency_key",
+                  "patient_id",
+                  "priority",
+                  "status",
+                  "title"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "enum": [
+                        "high",
+                        "low",
+                        "normal"
+                      ],
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "open",
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "idempotency_key",
+                    "patient_id",
+                    "priority",
+                    "status",
+                    "title"
+                  ],
+                  "type": "object"
+                },
+                "201": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "patient_id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "enum": [
+                        "high",
+                        "low",
+                        "normal"
+                      ],
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "open",
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "idempotency_key",
+                    "patient_id",
+                    "priority",
+                    "status",
+                    "title"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200",
                 "201",
@@ -810,6 +2761,7 @@
           "PUT /v1/admin/faults": {
             "json": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": {
                 "properties": {
                   "delay_ms": {
@@ -837,12 +2789,72 @@
               },
               "request_required": true,
               "request_required_fields": [],
+              "request_schema": {
+                "properties": {
+                  "delay_ms": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "ambiguous",
+                      "delay",
+                      "fail_before_commit",
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  "remaining": {
+                    "maximum": 100,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
               "response_required_fields": {
                 "200": [
                   "delay_ms",
                   "mode",
                   "remaining"
                 ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
               },
               "status_codes": [
                 "200",
@@ -853,6 +2865,7 @@
             "path": "/v1/admin/faults",
             "yaml": {
               "idempotency_key": null,
+              "parameters": [],
               "request_basic": {
                 "properties": {
                   "delay_ms": {
@@ -880,7 +2893,73 @@
               },
               "request_required": true,
               "request_required_fields": [],
-              "response_required_fields": {},
+              "request_schema": {
+                "properties": {
+                  "delay_ms": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "ambiguous",
+                      "delay",
+                      "fail_before_commit",
+                      "none"
+                    ],
+                    "type": "string"
+                  },
+                  "remaining": {
+                    "maximum": 100,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "response_required_fields": {
+                "200": [
+                  "delay_ms",
+                  "mode",
+                  "remaining"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "delay_ms": {
+                      "type": "integer"
+                    },
+                    "idempotency_key": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": [
+                        "ambiguous",
+                        "delay",
+                        "fail_before_commit",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delay_ms",
+                    "mode",
+                    "remaining"
+                  ],
+                  "type": "object"
+                }
+              },
               "status_codes": [
                 "200"
               ]

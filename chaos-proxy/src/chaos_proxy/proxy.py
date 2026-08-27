@@ -10,6 +10,7 @@ import httpx
 
 from chaos_proxy.controller import EpochStale, FaultController
 from chaos_proxy.httputil import (
+    BodyFramingError,
     header_map,
     idempotency_key,
     read_body,
@@ -88,7 +89,15 @@ class ProxyHandler(_BaseHandler):
         key = idempotency_key(self)
         epoch = controller.begin()
         try:
-            body = read_body(self)
+            try:
+                body = read_body(self)
+            except BodyFramingError as exc:
+                send_json(
+                    self,
+                    400,
+                    {"error": "invalid_body", "message": str(exc)},
+                )
+                return
             headers = header_map(self)
             target = request_target(self)
             controller.record(
@@ -230,7 +239,11 @@ class AdminHandler(_BaseHandler):
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
-    raw = read_body(handler)
+    try:
+        raw = read_body(handler)
+    except BodyFramingError as exc:
+        send_json(handler, 400, {"error": "invalid_body", "message": str(exc)})
+        return None
     if not raw:
         send_json(handler, 400, {"error": "invalid_json", "message": "Request body is required."})
         return None

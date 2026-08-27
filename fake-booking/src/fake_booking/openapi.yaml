@@ -18,22 +18,33 @@ paths:
       responses:
         "200":
           description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
   /v1/slots:
     get:
       summary: List slots
       parameters:
         - in: query
           name: resource_id
+          required: false
           schema:
             type: string
+            nullable: true
         - in: query
           name: available
+          required: false
           schema:
             type: boolean
             default: true
       responses:
         "200":
           description: Deterministic slot catalog for the configured seed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlotList"
   /v1/bookings:
     post:
       summary: Create a booking
@@ -54,8 +65,16 @@ paths:
       responses:
         "201":
           description: Booking committed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
         "200":
           description: Idempotent replay of an existing booking
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
         "409":
           description: Slot or idempotency conflict
         "503":
@@ -74,6 +93,10 @@ paths:
       responses:
         "200":
           description: Booking
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
         "404":
           description: Unknown booking
   /v1/admin/events:
@@ -82,17 +105,27 @@ paths:
       parameters:
         - in: query
           name: trace_id
+          required: false
           schema:
             type: string
+            nullable: true
       responses:
         "200":
           description: Ordered events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
   /v1/admin/faults:
     get:
       summary: Read current fault injection
       responses:
         "200":
           description: Fault state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultState"
     put:
       summary: Configure deterministic failure injection
       requestBody:
@@ -104,12 +137,20 @@ paths:
       responses:
         "200":
           description: Fault state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultState"
   /v1/admin/reset:
     post:
       summary: Reset catalog, bookings, events, and faults
       responses:
         "200":
           description: Reset complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetResult"
 components:
   schemas:
     BookingCreate:
@@ -118,9 +159,90 @@ components:
       properties:
         slot_id:
           type: string
+          minLength: 1
         patient_ref:
           type: string
           pattern: "^synth-[a-z0-9-]+$"
+    Booking:
+      type: object
+      required:
+        [id, slot_id, resource_id, start, end, patient_ref, status, idempotency_key]
+      properties:
+        id:
+          type: string
+        slot_id:
+          type: string
+        resource_id:
+          type: string
+        start:
+          type: string
+        end:
+          type: string
+        patient_ref:
+          type: string
+        status:
+          type: string
+          const: confirmed
+        idempotency_key:
+          type: string
+    Slot:
+      type: object
+      required: [id, resource_id, start, end, available]
+      properties:
+        id:
+          type: string
+        resource_id:
+          type: string
+        start:
+          type: string
+        end:
+          type: string
+        available:
+          type: boolean
+    SlotList:
+      type: object
+      required: [seed, slots]
+      properties:
+        seed:
+          type: string
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Slot"
+    Health:
+      type: object
+      required: [status, service, seed]
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: fake-booking
+        seed:
+          type: string
+    Event:
+      type: object
+      required: [seq, trace_id, type]
+      properties:
+        seq:
+          type: integer
+        trace_id:
+          type: string
+        type:
+          type: string
+        details:
+          type: object
+    EventList:
+      type: object
+      required: [seed, events]
+      properties:
+        seed:
+          type: string
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
     FaultConfig:
       type: object
       properties:
@@ -138,3 +260,26 @@ components:
         idempotency_key:
           type: string
           nullable: true
+    FaultState:
+      type: object
+      required: [mode, delay_ms, remaining]
+      properties:
+        mode:
+          type: string
+          enum: [none, fail_before_commit, delay, ambiguous]
+        delay_ms:
+          type: integer
+        remaining:
+          type: integer
+        idempotency_key:
+          type: string
+          nullable: true
+    ResetResult:
+      type: object
+      required: [status, seed]
+      properties:
+        status:
+          type: string
+          const: reset
+        seed:
+          type: string
