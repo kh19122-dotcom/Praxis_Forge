@@ -504,3 +504,76 @@ def test_restore_restart_reset_allocation_never_reuses_trace(tmp_path: Path) -> 
     assert after_reset not in issued
     assert len(issued | {allocated, allocated_again, after_reset}) == len(issued) + 1
 
+
+def test_same_key_replay_collapse_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    slot_id = _first_slot_id(first)
+    created = first.create_booking("replay-collapse-01", slot_id, "synth-ada")
+    epoch, replay_trace = first.begin_request(
+        "booking_requested",
+        idempotency_key="replay-collapse-01",
+        slot_id=slot_id,
+        patient_ref="synth-ada",
+    )
+    replay = first.create_booking(
+        "replay-collapse-01",
+        slot_id,
+        "synth-ada",
+        epoch=epoch,
+        trace_id=replay_trace,
+    )
+    first.finish_request(epoch)
+    assert replay["kind"] == "replay"
+    traces = [event["trace_id"] for event in first.events]
+    assert traces == [
+        "tr_000001_000001",
+        "tr_000001_000002",
+        "tr_000001_000002",
+    ]
+    restored = Store(Settings(seed="obj-001", state_path=path))
+    assert restored.get_booking(created["booking"]["id"]) is not None
+    assert {event["trace_id"] for event in restored.events} == {
+        "tr_000001_000001",
+        "tr_000001_000002",
+    }
+
+    def mutate(payload: dict) -> None:
+        for event in payload["events"]:
+            if event["trace_id"] == "tr_000001_000002":
+                event["trace_id"] = "tr_000001_000001"
+        payload["trace"] = 1
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "collapsed trace history")
+
+
+def test_fault_config_trace_collapse_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    slot_id = _first_slot_id(first)
+    created = first.create_booking("fault-collapse-01", slot_id, "synth-ada")
+    first.set_fault(FaultConfig(mode="fail_before_commit", remaining=1))
+    first.record(
+        first.next_trace_id(),
+        "fault_configured",
+        mode="fail_before_commit",
+        delay_ms=50,
+        remaining=1,
+        idempotency_key=None,
+    )
+    traces = [event["trace_id"] for event in first.events]
+    assert traces == ["tr_000001_000001", "tr_000001_000002"]
+    restored = Store(Settings(seed="obj-001", state_path=path))
+    assert restored.get_booking(created["booking"]["id"]) is not None
+    assert [event["type"] for event in restored.events] == ["booking_committed", "fault_configured"]
+
+    def mutate(payload: dict) -> None:
+        for event in payload["events"]:
+            if event["trace_id"] == "tr_000001_000002":
+                event["trace_id"] = "tr_000001_000001"
+        payload["trace"] = 1
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "collapsed trace history")
+

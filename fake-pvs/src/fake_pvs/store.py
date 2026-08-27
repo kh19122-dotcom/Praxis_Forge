@@ -545,9 +545,27 @@ def _validate_trace_identities(events: list[dict]) -> None:
     for group in grouped.values():
         object_ids: set[str] = set()
         operation_keys: set[str] = set()
+        requested = 0
+        terminals = 0
+        has_fault_configured = False
+        has_other_events = False
         for event in group:
             details = event["details"]
             event_type = event["type"]
+            if event_type == "task_requested":
+                requested += 1
+            if event_type in {
+                "task_committed",
+                "task_replayed",
+                "conflict",
+                "commit_skipped",
+                "fault_configured",
+            }:
+                terminals += 1
+            if event_type == "fault_configured":
+                has_fault_configured = True
+            else:
+                has_other_events = True
             if event_type in {"task_committed", "task_replayed"}:
                 task_id_value = details.get("task_id")
                 if isinstance(task_id_value, str):
@@ -556,5 +574,11 @@ def _validate_trace_identities(events: list[dict]) -> None:
                 key = details.get("idempotency_key")
                 if isinstance(key, str):
                     operation_keys.add(key)
-        if len(object_ids) > 1 or len(operation_keys) > 1:
+        if (
+            requested > 1
+            or terminals > 1
+            or (has_fault_configured and has_other_events)
+            or len(object_ids) > 1
+            or len(operation_keys) > 1
+        ):
             raise RestoreError("collapsed trace history")
