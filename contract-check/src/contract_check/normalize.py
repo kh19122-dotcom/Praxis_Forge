@@ -229,16 +229,16 @@ def _response_shapes(spec: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]
         content = response.get("content") or {}
         if not isinstance(content, dict):
             continue
-        json_content = content.get("application/json")
-        if not isinstance(json_content, dict):
+        if "application/json" not in content:
             continue
-        schema = normalize_schema(spec, json_content.get("schema"))
-        if schema:
-            shapes[str(code)] = {
-                "schema": schema,
-                "required_fields": required_fields(schema),
-                "basic": basic_shape(schema),
-            }
+        json_content = content.get("application/json")
+        raw_schema = json_content.get("schema") if isinstance(json_content, dict) else None
+        schema = normalize_schema(spec, raw_schema) or None
+        shapes[str(code)] = {
+            "schema": schema,
+            "required_fields": required_fields(schema),
+            "basic": basic_shape(schema),
+        }
     return dict(sorted(shapes.items()))
 
 

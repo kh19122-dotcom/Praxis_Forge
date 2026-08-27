@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import copy
 
+import pytest
 import yaml
 
-from contract_check.fingerprint import digest_snapshot
-from contract_check.normalize import parse_yaml_spec
+from contract_check.compare import compare_service
+from contract_check.fingerprint import digest_snapshot, load_fingerprint, service_record
+from contract_check.normalize import extract_operations, parse_yaml_spec
 from contract_check.surface import COMPARED_DIMENSIONS, IGNORED_DIMENSIONS, build_snapshot
 from tests.fakes import SpecServer, load_fixture, load_json_spec
 from tests.test_check import _run, _seed_fingerprint
+
+SCHEMA_COMPLETENESS_CASES = (
+    ("fake-booking", "GET", "/v1/slots", "200"),
+    ("fake-pvs", "GET", "/v1/patients", "200"),
+)
+
+REPLAY_ONLY_CASES = (
+    ("fake-booking", "POST", "/v1/bookings", "200"),
+    ("fake-pvs", "POST", "/v1/tasks", "200"),
+)
 
 
 def _mismatch_hit(
@@ -22,6 +34,171 @@ def _mismatch_hit(
         and item.get("path") == path
         and item.get("method") == method
     ]
+
+
+def _spec_pair(service: str) -> tuple[dict, dict]:
+    return (
+        parse_yaml_spec(load_fixture(service, "yaml")),
+        load_json_spec(service),
+    )
+
+
+def _remove_json_response_schema(
+    spec: dict, *, method: str, path: str, code: str
+) -> None:
+    del spec["paths"][path][method.lower()]["responses"][code]["content"][
+        "application/json"
+    ]["schema"]
+
+
+def _direct_response_hits(
+    mismatches: list[dict], *, service: str, method: str, path: str, code: str
+) -> list[dict]:
+    return [
+        item
+        for item in mismatches
+        if item["dimension"] == "response_shape"
+        and item["service"] == service
+        and item.get("method") == method
+        and item.get("path") == path
+        and f"JSON {code} response schema differs" in item["detail"]
+        and "packaged YAML and generated JSON" in item["detail"]
+    ]
+
+
+@pytest.mark.parametrize("service,method,path,code", SCHEMA_COMPLETENESS_CASES)
+def test_shared_json_success_schema_presence_baseline(
+    service: str, method: str, path: str, code: str
+) -> None:
+    yaml_spec, json_spec = _spec_pair(service)
+    snapshot, mismatches = compare_service(
+        service,
+        yaml_spec,
+        json_spec,
+        load_fingerprint()["services"][service],
+    )
+    assert not _direct_response_hits(
+        mismatches, service=service, method=method, path=path, code=code
+    )
+    operation = snapshot["operations"][f"{method} {path}"]
+    assert operation["yaml"]["response_schemas"][code] is not None
+    assert operation["json"]["response_schemas"][code] is not None
+
+
+@pytest.mark.parametrize("service,method,path,code", SCHEMA_COMPLETENESS_CASES)
+def test_runtime_advertised_json_success_without_schema_is_direct_mismatch(
+    service: str, method: str, path: str, code: str
+) -> None:
+    yaml_spec, json_spec = _spec_pair(service)
+    _remove_json_response_schema(json_spec, method=method, path=path, code=code)
+    snapshot, mismatches = compare_service(
+        service,
+        yaml_spec,
+        json_spec,
+        load_fingerprint()["services"][service],
+    )
+    operation = snapshot["operations"][f"{method} {path}"]
+    assert code in operation["json"]["response_schemas"]
+    assert operation["json"]["response_schemas"][code] is None
+    hits = _direct_response_hits(
+        mismatches, service=service, method=method, path=path, code=code
+    )
+    assert hits, mismatches
+    assert hits[0]["expected"] is not None
+    assert hits[0]["actual"] is None
+
+
+@pytest.mark.parametrize("service,method,path,code", SCHEMA_COMPLETENESS_CASES)
+def test_yaml_advertised_json_success_without_schema_is_direct_mismatch(
+    service: str, method: str, path: str, code: str
+) -> None:
+    yaml_spec, json_spec = _spec_pair(service)
+    _remove_json_response_schema(yaml_spec, method=method, path=path, code=code)
+    snapshot, mismatches = compare_service(
+        service,
+        yaml_spec,
+        json_spec,
+        load_fingerprint()["services"][service],
+    )
+    operation = snapshot["operations"][f"{method} {path}"]
+    assert code in operation["yaml"]["response_schemas"]
+    assert operation["yaml"]["response_schemas"][code] is None
+    hits = _direct_response_hits(
+        mismatches, service=service, method=method, path=path, code=code
+    )
+    assert hits, mismatches
+    assert hits[0]["expected"] is None
+    assert hits[0]["actual"] is not None
+
+
+@pytest.mark.parametrize("missing_from", ("yaml", "json"))
+@pytest.mark.parametrize("service,method,path,code", SCHEMA_COMPLETENESS_CASES)
+def test_self_consistent_asymmetric_fingerprint_cannot_mask_direct_response_mismatch(
+    missing_from: str, service: str, method: str, path: str, code: str
+) -> None:
+    yaml_spec, json_spec = _spec_pair(service)
+    target = yaml_spec if missing_from == "yaml" else json_spec
+    _remove_json_response_schema(target, method=method, path=path, code=code)
+    asymmetric_snapshot = build_snapshot(service, yaml_spec, json_spec)
+
+    _snapshot, mismatches = compare_service(
+        service,
+        yaml_spec,
+        json_spec,
+        service_record(asymmetric_snapshot),
+    )
+
+    assert not [item for item in mismatches if item["dimension"] == "fingerprint"]
+    assert _direct_response_hits(
+        mismatches, service=service, method=method, path=path, code=code
+    ), mismatches
+
+
+def test_current_shared_json_success_responses_have_meaningful_schemas() -> None:
+    for service in ("fake-booking", "fake-pvs"):
+        yaml_spec, json_spec = _spec_pair(service)
+        yaml_operations = extract_operations(yaml_spec)
+        json_operations = extract_operations(json_spec)
+        shared_pairs: list[tuple[str, str]] = []
+        for operation_key in sorted(set(yaml_operations) & set(json_operations)):
+            yaml_responses = yaml_operations[operation_key]["response_shapes"]
+            json_responses = json_operations[operation_key]["response_shapes"]
+            for code in sorted(set(yaml_responses) & set(json_responses)):
+                if not code.startswith("2"):
+                    continue
+                shared_pairs.append((operation_key, code))
+                assert yaml_responses[code]["schema"] is not None, (
+                    service,
+                    operation_key,
+                    code,
+                    "yaml",
+                )
+                assert json_responses[code]["schema"] is not None, (
+                    service,
+                    operation_key,
+                    code,
+                    "json",
+                )
+        assert shared_pairs, service
+
+
+@pytest.mark.parametrize("service,method,path,code", REPLAY_ONLY_CASES)
+def test_yaml_only_replay_success_code_remains_ignored(
+    service: str, method: str, path: str, code: str
+) -> None:
+    yaml_spec, json_spec = _spec_pair(service)
+    snapshot, mismatches = compare_service(
+        service,
+        yaml_spec,
+        json_spec,
+        load_fingerprint()["services"][service],
+    )
+    operation = snapshot["operations"][f"{method} {path}"]
+    assert operation["yaml"]["response_schemas"][code] is not None
+    assert code not in operation["json"]["response_schemas"]
+    assert not _direct_response_hits(
+        mismatches, service=service, method=method, path=path, code=code
+    )
 
 
 def test_compared_and_ignored_dimensions_are_explicit() -> None:
