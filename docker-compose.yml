@@ -226,6 +226,16 @@ services:
     volumes:
       - ./docker-compose.yml:/docker-compose.yml:ro
 
+  external-client-tests:
+    profiles: ["test"]
+    build:
+      context: ./external-client
+      target: test
+    volumes:
+      - ./docker-compose.yml:/docker-compose.yml:ro
+      - ./docker-compose.lab.yml:/docker-compose.lab.yml:ro
+      - ./external-client/docker-compose.yml:/external-client/docker-compose.yml:ro
+
 volumes:
   fake-booking-state:
   fake-pvs-state:

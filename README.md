@@ -82,7 +82,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/admin/reset
 Docker (from the repository root):
 
 ```bash
-docker compose --profile test run --rm fake-booking-tests
+docker compose --profile test run --rm --build fake-booking-tests
 ```
 
 Local (Python 3.12+):
@@ -91,7 +91,8 @@ Local (Python 3.12+):
 cd fake-booking
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 ruff check src tests
 pytest -q
 ```
@@ -189,7 +190,7 @@ curl -s -X POST http://127.0.0.1:8081/v1/admin/reset
 Docker (from the repository root):
 
 ```bash
-docker compose --profile test run --rm fake-pvs-tests
+docker compose --profile test run --rm --build fake-pvs-tests
 ```
 
 Local (Python 3.12+):
@@ -198,7 +199,8 @@ Local (Python 3.12+):
 cd fake-pvs
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 ruff check src tests
 pytest -q
 ```
@@ -372,7 +374,7 @@ Ambiguous or unsupported framing is a client error (`400 invalid_body`) and neve
 Docker (from the repository root):
 
 ```bash
-docker compose --profile test run --rm chaos-proxy-tests
+docker compose --profile test run --rm --build chaos-proxy-tests
 ```
 
 Local (Python 3.12+):
@@ -381,7 +383,8 @@ Local (Python 3.12+):
 cd chaos-proxy
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 ruff check src tests
 pytest -q
 ```
@@ -482,18 +485,27 @@ docker network rm praxis-forge-lab
 
 ### Tests
 
+Docker (from the repository root):
+
+```bash
+docker compose --profile test run --rm --build external-client-tests
+```
+
+That test container mounts the root Compose files and `external-client/docker-compose.yml` read-only so the compose-binding tests can inspect the lab topology without widening the image build context.
+
 Local (Python 3.12+):
 
 ```bash
 cd external-client
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 ruff check src tests
 pytest -q
 ```
 
-CI runs the package lint/unit suite and the two-project cross-Compose gate.
+CI runs the package lint/unit suite, the documented test image, and the two-project cross-Compose gate.
 
 ## Scenario runner
 
@@ -609,7 +621,8 @@ docker compose up --build -d fake-booking fake-pvs
 cd scenario-runner
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 scenario-runner --list
 scenario-runner
 scenario-runner --scenario combined-happy-path
@@ -635,7 +648,7 @@ Host defaults for chaos URLs are `http://127.0.0.1:8090`, `http://127.0.0.1:8091
 Docker (from the repository root):
 
 ```bash
-docker compose --profile test run --rm scenario-runner-tests
+docker compose --profile test run --rm --build scenario-runner-tests
 ```
 
 Local (Python 3.12+):
@@ -644,7 +657,8 @@ Local (Python 3.12+):
 cd scenario-runner
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 ruff check src tests
 pytest -q
 ```
@@ -703,7 +717,8 @@ docker compose up --build -d fake-booking fake-pvs
 cd contract-check
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 contract-check
 ```
 
@@ -730,7 +745,7 @@ The packaged fingerprint is `schema: praxis-forge.contract-fingerprint.v1`. Rege
 Docker (from the repository root):
 
 ```bash
-docker compose --profile test run --rm contract-check-tests
+docker compose --profile test run --rm --build contract-check-tests
 ```
 
 Local (Python 3.12+):
@@ -739,9 +754,98 @@ Local (Python 3.12+):
 cd contract-check
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r constraints-dev.txt
+pip install --no-deps -e .
 ruff check src tests
 pytest -q
 ```
 
 The unit suite uses in-process HTTP fakes. CI also runs the contract gate against real Compose simulator containers.
+
+
+## Reproducible simulator builds
+
+A Git SHA pins Forge source **and** the reviewed Python/container inputs below. It does not pin GitHub-hosted runners, Docker Engine, or byte-identical images across CPU architectures.
+
+Supported invariant:
+
+> For a given repository SHA, linux/amd64 and linux/arm64 builds use the same pinned multi-architecture Python base-image manifest and the same declared Python package versions. Architecture-specific image layers and wheels may differ. Builds are not hermetic/offline.
+
+### Containerized unit tests
+
+From the repository root:
+
+```bash
+docker compose --profile test run --rm --build fake-booking-tests
+docker compose --profile test run --rm --build fake-pvs-tests
+docker compose --profile test run --rm --build chaos-proxy-tests
+docker compose --profile test run --rm --build scenario-runner-tests
+docker compose --profile test run --rm --build contract-check-tests
+docker compose --profile test run --rm --build external-client-tests
+```
+
+Each test image clears any inherited runtime `ENTRYPOINT` and runs `pytest -q`. Runtime CLI entrypoints are unchanged.
+
+Read-only inputs used by compose/isolation tests:
+
+- all six test services mount `./docker-compose.yml` at `/docker-compose.yml`
+- `external-client-tests` also mounts `./docker-compose.lab.yml` and `./external-client/docker-compose.yml` at the paths those tests read
+- `contract-check` copies its `Dockerfile` into the test image because `test_compose_binding.py` reads `/app/Dockerfile`
+- `external-client` copies its `Dockerfile` and component Compose file into `/app` for isolation tests
+
+Do not widen component build contexts to the whole repository unless a new test actually needs that.
+
+### Python base image
+
+All six component Dockerfiles start from:
+
+`python:3.12-slim@sha256:7a8b475003c4fe15a2cd4e55e5cfc2f3560bdc9333d624f24cdd6d4340fd7a17`
+
+That digest is the published multi-architecture manifest for `python:3.12-slim` and includes linux/amd64 and linux/arm64. Do not replace it with a single-architecture child digest.
+
+Refresh procedure:
+
+1. Inspect the current `python:3.12-slim` multi-arch manifest digest (registry `Docker-Content-Digest` for the tag, not an amd64-only child).
+2. Confirm the index contains both `linux/amd64` and `linux/arm64`.
+3. Update `scripts/build_pins.py` (`PYTHON_BASE_TAG` / `PYTHON_BASE_DIGEST`) and every component `FROM` line to the same reference.
+4. Rebuild/test, then commit the pin change by itself or with the lock refresh it requires.
+
+pip `25.0.1` is the pip shipped in that base image. Dockerfiles do not run `pip install --upgrade pip`. Host CI pins the same pip version before installing locks.
+
+### Dependency locks
+
+Direct dependencies in each `pyproject.toml` remain compatibility bounds. Exact runtime and test resolution is committed per component:
+
+- `<component>/constraints.txt` — runtime graph
+- `<component>/constraints-dev.txt` — runtime + `[dev]` graph
+- `build-constraints.txt` and each `[build-system] requires = ["setuptools==84.0.0"]` — PEP 517 build backend
+
+Generate or refresh locks with uv:
+
+```bash
+python3 scripts/compile_locks.py
+```
+
+Validate committed pins, Docker/CI consumption, lock freshness, and the multi-arch base manifest:
+
+```bash
+python3 scripts/validate_locks.py
+```
+
+Compare installed package versions in built images with the committed locks:
+
+```bash
+python3 scripts/verify_installed_versions.py
+```
+
+Docker runtime and test stages install third-party packages with `pip install --require-hashes -r constraints[-dev].txt`, then install the local package with `--no-deps`. Host package CI uses the same sequence.
+
+### Architecture coverage
+
+CI:
+
+- host package jobs run pytest on `ubuntu-latest` (linux/amd64) using the committed locks
+- `container-unit-tests` runs the six documented Compose test images on `ubuntu-latest` (linux/amd64), including pytest
+- `image-build-smoke` builds each component `test` target for `linux/amd64` and `linux/arm64` via Buildx/QEMU and compares `pip freeze` to the lock
+- arm64 CI proves installability and locked versions; it does not re-run semantic/soak/restart suites under emulation
+- images are not required to be byte-identical across architectures

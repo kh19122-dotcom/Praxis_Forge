@@ -1,0 +1,3 @@
+# Pin the PEP 517 build backend used when compiling locks and building
+# component packages. Do not leave setuptools as an open-ended lower bound.
+setuptools==84.0.0
