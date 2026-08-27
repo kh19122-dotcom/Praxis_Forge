@@ -40,6 +40,8 @@ class FaultController:
         self._seq = 0
         self._epoch = 0
         self._resetting = False
+        self._pending_resets = 0
+        self._reset_generation = 0
         self._in_flight: dict[int, int] = {}
 
     def in_flight_total(self) -> int:
@@ -50,9 +52,17 @@ class FaultController:
         with self._lock:
             return self._resetting
 
+    def pending_reset_count(self) -> int:
+        with self._lock:
+            return self._pending_resets
+
+    def reset_generation(self) -> int:
+        with self._lock:
+            return self._reset_generation
+
     def begin(self) -> int:
         with self._cond:
-            while self._resetting:
+            while self._pending_resets > 0:
                 self._cond.wait()
             epoch = self._epoch
             self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
@@ -80,17 +90,27 @@ class FaultController:
 
     def reset(self) -> Fault:
         with self._cond:
-            self._resetting = True
-            stale = self._epoch
-            self._epoch += 1
-            while self._in_flight.get(stale, 0) > 0:
-                self._cond.wait()
-            self._fault = Fault()
-            self._events = []
-            self._seq = 0
-            self._resetting = False
-            self._cond.notify_all()
-            return self._fault
+            self._pending_resets += 1
+            owns_reset = False
+            try:
+                while self._resetting:
+                    self._cond.wait()
+                owns_reset = True
+                self._resetting = True
+                self._reset_generation += 1
+                stale = self._epoch
+                self._epoch += 1
+                while self._in_flight.get(stale, 0) > 0:
+                    self._cond.wait()
+                self._fault = Fault()
+                self._events = []
+                self._seq = 0
+                return self._fault
+            finally:
+                self._pending_resets -= 1
+                if owns_reset:
+                    self._resetting = False
+                self._cond.notify_all()
 
     def configure(self, payload: dict[str, Any], *, epoch: int | None = None) -> Fault:
         mode = payload.get("mode", "none")

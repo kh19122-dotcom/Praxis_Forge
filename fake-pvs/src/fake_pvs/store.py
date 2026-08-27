@@ -41,6 +41,8 @@ class Store:
         self._cond = Condition(self._lock)
         self._epoch = 0
         self._resetting = False
+        self._pending_resets = 0
+        self._reset_generation = 0
         self._in_flight: dict[int, int] = {}
         self.patients: dict[str, dict] = {}
         self.encounters: dict[str, dict] = {}
@@ -73,9 +75,17 @@ class Store:
         with self._lock:
             return self._resetting
 
+    def pending_reset_count(self) -> int:
+        with self._lock:
+            return self._pending_resets
+
+    def reset_generation(self) -> int:
+        with self._lock:
+            return self._reset_generation
+
     def admit(self) -> int:
         with self._cond:
-            while self._resetting:
+            while self._pending_resets > 0:
                 self._cond.wait()
             epoch = self._epoch
             self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
@@ -87,14 +97,24 @@ class Store:
 
     def reset(self, restore: bool = False) -> None:
         with self._cond:
-            self._resetting = True
-            stale = self._epoch
-            self._epoch += 1
-            while self._in_flight.get(stale, 0) > 0:
-                self._cond.wait()
-            self._reset_locked(restore=restore)
-            self._resetting = False
-            self._cond.notify_all()
+            self._pending_resets += 1
+            owns_reset = False
+            try:
+                while self._resetting:
+                    self._cond.wait()
+                owns_reset = True
+                self._resetting = True
+                self._reset_generation += 1
+                stale = self._epoch
+                self._epoch += 1
+                while self._in_flight.get(stale, 0) > 0:
+                    self._cond.wait()
+                self._reset_locked(restore=restore)
+            finally:
+                self._pending_resets -= 1
+                if owns_reset:
+                    self._resetting = False
+                self._cond.notify_all()
 
     def _reset_locked(self, *, restore: bool) -> None:
         self.patients = generate_patients(self.settings)
@@ -119,7 +139,7 @@ class Store:
         with self._cond:
             owns_lifetime = epoch is None
             if owns_lifetime:
-                while self._resetting:
+                while self._pending_resets > 0:
                     self._cond.wait()
                 epoch = self._epoch
                 self._in_flight[epoch] = self._in_flight.get(epoch, 0) + 1
@@ -458,6 +478,7 @@ def _validate_pvs_snapshot(
 
     events = _validate_events(events_raw, seq, trace, epoch)
     _validate_commit_evidence(tasks, events)
+    _validate_trace_identities(events)
     return tasks, tasks_by_key, events, seq, trace, epoch
 
 
@@ -515,3 +536,49 @@ def _validate_commit_evidence(tasks: dict[str, dict], events: list[dict]) -> Non
     missing = set(tasks) - committed
     if missing:
         raise RestoreError("task exists without matching committed evidence")
+
+
+def _validate_trace_identities(events: list[dict]) -> None:
+    grouped: dict[str, list[dict]] = {}
+    for event in events:
+        grouped.setdefault(event["trace_id"], []).append(event)
+    for group in grouped.values():
+        object_ids: set[str] = set()
+        operation_keys: set[str] = set()
+        requested = 0
+        terminals = 0
+        has_fault_configured = False
+        has_other_events = False
+        for event in group:
+            details = event["details"]
+            event_type = event["type"]
+            if event_type == "task_requested":
+                requested += 1
+            if event_type in {
+                "task_committed",
+                "task_replayed",
+                "conflict",
+                "commit_skipped",
+                "fault_configured",
+            }:
+                terminals += 1
+            if event_type == "fault_configured":
+                has_fault_configured = True
+            else:
+                has_other_events = True
+            if event_type in {"task_committed", "task_replayed"}:
+                task_id_value = details.get("task_id")
+                if isinstance(task_id_value, str):
+                    object_ids.add(task_id_value)
+            if event_type in {"task_requested", "task_committed", "task_replayed"}:
+                key = details.get("idempotency_key")
+                if isinstance(key, str):
+                    operation_keys.add(key)
+        if (
+            requested > 1
+            or terminals > 1
+            or (has_fault_configured and has_other_events)
+            or len(object_ids) > 1
+            or len(operation_keys) > 1
+        ):
+            raise RestoreError("collapsed trace history")

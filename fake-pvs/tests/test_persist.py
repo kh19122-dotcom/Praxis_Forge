@@ -363,3 +363,203 @@ def test_restore_reset_does_not_reuse_issued_trace(tmp_path: Path) -> None:
     after = {event["trace_id"] for event in restored.events}
     assert after
     assert issued.isdisjoint(after)
+
+
+def test_collapsed_two_operation_trace_history_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("collapse-a-0001", "synth-ada", "synth-task", "normal")
+    first.create_task("collapse-b-0001", "synth-ben", "synth-other", "high")
+    traces = [event["trace_id"] for event in first.events]
+    assert traces == ["tr_000001_000001", "tr_000001_000002"]
+
+    def mutate(payload: dict) -> None:
+        for event in payload["events"]:
+            if event["trace_id"] == "tr_000001_000002":
+                event["trace_id"] = "tr_000001_000001"
+        payload["trace"] = 1
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "collapsed trace history")
+
+
+def test_valid_multi_event_single_trace_restore(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    epoch, trace_id = first.begin_request(
+        "task_requested",
+        idempotency_key="multi-event-0001",
+        patient_id="synth-ada",
+        title="synth-task",
+        priority="normal",
+    )
+    first.record(trace_id, "fault_injected", epoch=epoch, mode="delay")
+    first.record(trace_id, "response_delayed", epoch=epoch, delay_ms=5, mode="delay")
+    created = first.create_task(
+        "multi-event-0001",
+        "synth-ada",
+        "synth-task",
+        "normal",
+        epoch=epoch,
+        trace_id=trace_id,
+    )
+    first.record(
+        trace_id,
+        "response_suppressed",
+        epoch=epoch,
+        reason="ambiguous_outcome",
+        task_id=created["task"]["id"],
+        committed=True,
+    )
+    first.finish_request(epoch)
+    second = Store(Settings(seed="obj-002", state_path=path))
+    restored = second.get_task(created["task"]["id"])
+    assert restored is not None
+    types = [event["type"] for event in second.events]
+    assert types == [
+        "task_requested",
+        "fault_injected",
+        "response_delayed",
+        "task_committed",
+        "response_suppressed",
+    ]
+    assert {event["trace_id"] for event in second.events} == {trace_id}
+
+
+def test_valid_replay_and_conflict_traces_restore(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("replay-key-0001", "synth-ada", "synth-task", "normal")
+    epoch, replay_trace = first.begin_request(
+        "task_requested",
+        idempotency_key="replay-key-0001",
+        patient_id="synth-ada",
+        title="synth-task",
+        priority="normal",
+    )
+    replay = first.create_task(
+        "replay-key-0001",
+        "synth-ada",
+        "synth-task",
+        "normal",
+        epoch=epoch,
+        trace_id=replay_trace,
+    )
+    first.finish_request(epoch)
+    assert replay["kind"] == "replay"
+    conflict_epoch, conflict_trace = first.begin_request(
+        "task_requested",
+        idempotency_key="replay-key-0001",
+        patient_id="synth-ben",
+        title="synth-other",
+        priority="high",
+    )
+    conflict = first.create_task(
+        "replay-key-0001",
+        "synth-ben",
+        "synth-other",
+        "high",
+        epoch=conflict_epoch,
+        trace_id=conflict_trace,
+    )
+    first.finish_request(conflict_epoch)
+    assert conflict["kind"] == "idempotency_conflict"
+    second = Store(Settings(seed="obj-002", state_path=path))
+    assert second.get_task(created["task"]["id"]) is not None
+    types = [event["type"] for event in second.events]
+    assert "task_committed" in types
+    assert "task_replayed" in types
+    assert "conflict" in types
+
+
+def test_restore_restart_reset_allocation_never_reuses_trace(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("alloc-keep-0001", "synth-ada", "synth-task", "normal")
+    first.create_task("alloc-keep-0002", "synth-ben", "synth-other", "high")
+    issued = {event["trace_id"] for event in first.events}
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    allocated = restored.next_trace_id()
+    issued.add(allocated)
+    restarted = Store(Settings(seed="obj-002", state_path=path))
+    allocated_again = restarted.next_trace_id()
+    assert allocated_again not in issued
+    issued.add(allocated_again)
+    restarted.reset()
+    after_reset = restarted.next_trace_id()
+    assert after_reset not in issued
+    assert len(issued | {allocated, allocated_again, after_reset}) == len(issued) + 1
+
+
+def test_same_key_replay_collapse_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("replay-collapse-01", "synth-ada", "synth-task", "normal")
+    epoch, replay_trace = first.begin_request(
+        "task_requested",
+        idempotency_key="replay-collapse-01",
+        patient_id="synth-ada",
+        title="synth-task",
+        priority="normal",
+    )
+    replay = first.create_task(
+        "replay-collapse-01",
+        "synth-ada",
+        "synth-task",
+        "normal",
+        epoch=epoch,
+        trace_id=replay_trace,
+    )
+    first.finish_request(epoch)
+    assert replay["kind"] == "replay"
+    traces = [event["trace_id"] for event in first.events]
+    assert traces == [
+        "tr_000001_000001",
+        "tr_000001_000002",
+        "tr_000001_000002",
+    ]
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.get_task(created["task"]["id"]) is not None
+    assert {event["trace_id"] for event in restored.events} == {
+        "tr_000001_000001",
+        "tr_000001_000002",
+    }
+
+    def mutate(payload: dict) -> None:
+        for event in payload["events"]:
+            if event["trace_id"] == "tr_000001_000002":
+                event["trace_id"] = "tr_000001_000001"
+        payload["trace"] = 1
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "collapsed trace history")
+
+
+def test_fault_config_trace_collapse_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("fault-collapse-01", "synth-ada", "synth-task", "normal")
+    first.set_fault(FaultConfig(mode="fail_before_commit", remaining=1))
+    first.record(
+        first.next_trace_id(),
+        "fault_configured",
+        mode="fail_before_commit",
+        delay_ms=50,
+        remaining=1,
+        idempotency_key=None,
+    )
+    traces = [event["trace_id"] for event in first.events]
+    assert traces == ["tr_000001_000001", "tr_000001_000002"]
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.get_task(created["task"]["id"]) is not None
+    assert [event["type"] for event in restored.events] == ["task_committed", "fault_configured"]
+
+    def mutate(payload: dict) -> None:
+        for event in payload["events"]:
+            if event["trace_id"] == "tr_000001_000002":
+                event["trace_id"] = "tr_000001_000001"
+        payload["trace"] = 1
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "collapsed trace history")
+
