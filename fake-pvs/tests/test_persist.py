@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from fake_pvs.models import FaultConfig
-from fake_pvs.persist import RestoreError
+from fake_pvs.persist import PersistenceCrash, RestoreError
 from fake_pvs.settings import Settings
 from fake_pvs.store import Store
 
@@ -479,15 +479,34 @@ def test_restore_restart_reset_allocation_never_reuses_trace(tmp_path: Path) -> 
     first.create_task("alloc-keep-0002", "synth-ben", "synth-other", "high")
     issued = {event["trace_id"] for event in first.events}
     restored = Store(Settings(seed="obj-002", state_path=path))
-    allocated = restored.next_trace_id()
+    restored.configure_fault(FaultConfig(mode="delay", remaining=1))
+    allocated = next(
+        event["trace_id"] for event in restored.events if event["type"] == "fault_configured"
+    )
     issued.add(allocated)
     restarted = Store(Settings(seed="obj-002", state_path=path))
-    allocated_again = restarted.next_trace_id()
+    assert any(
+        event["type"] == "fault_configured" and event["trace_id"] == allocated
+        for event in restarted.events
+    )
+    allocated_again_fault = restarted.configure_fault(
+        FaultConfig(mode="fail_before_commit", remaining=1)
+    )
+    allocated_again = next(
+        event["trace_id"]
+        for event in restarted.events
+        if event["type"] == "fault_configured"
+        and event["details"]["mode"] == allocated_again_fault.mode
+    )
     assert allocated_again not in issued
     issued.add(allocated_again)
     restarted.reset()
-    after_reset = restarted.next_trace_id()
+    after_reset_fault = restarted.configure_fault(FaultConfig(mode="delay", remaining=1))
+    after_reset = next(
+        event["trace_id"] for event in restarted.events if event["type"] == "fault_configured"
+    )
     assert after_reset not in issued
+    assert after_reset_fault.mode == "delay"
     assert len(issued | {allocated, allocated_again, after_reset}) == len(issued) + 1
 
 
@@ -539,15 +558,7 @@ def test_fault_config_trace_collapse_fails_closed(tmp_path: Path) -> None:
     path = str(tmp_path / "pvs.json")
     first = Store(Settings(seed="obj-002", state_path=path))
     created = first.create_task("fault-collapse-01", "synth-ada", "synth-task", "normal")
-    first.set_fault(FaultConfig(mode="fail_before_commit", remaining=1))
-    first.record(
-        first.next_trace_id(),
-        "fault_configured",
-        mode="fail_before_commit",
-        delay_ms=50,
-        remaining=1,
-        idempotency_key=None,
-    )
+    first.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
     traces = [event["trace_id"] for event in first.events]
     assert traces == ["tr_000001_000001", "tr_000001_000002"]
     restored = Store(Settings(seed="obj-002", state_path=path))
@@ -562,4 +573,89 @@ def test_fault_config_trace_collapse_fails_closed(tmp_path: Path) -> None:
 
     original = _corrupt(path, mutate)
     _assert_restore_fails(path, original, "collapsed trace history")
+
+
+def test_fault_configure_persist_failpoint_leaves_old_or_complete_state(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("fault-atomic-0001", "synth-ada", "synth-task", "normal")
+    before = Path(path).read_text(encoding="utf-8")
+    payload = json.loads(before)
+    assert payload["trace"] == 1
+    first.arm_failpoint("persist")
+    with pytest.raises(PersistenceCrash):
+        first.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
+    assert Path(path).read_text(encoding="utf-8") == before
+
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.get_task(created["task"]["id"]) is not None
+    assert restored.fault.mode == "none"
+    assert restored.fault.remaining == 0
+    types = [event["type"] for event in restored.events]
+    assert "fault_configured" not in types
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["trace"] == 1
+    assert max(int(event["trace_id"].rsplit("_", 1)[1]) for event in payload["events"]) == 1
+
+    complete = Store(Settings(seed="obj-002", state_path=path))
+    complete.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["trace"] == 2
+    assert any(event["type"] == "fault_configured" for event in payload["events"])
+    restarted = Store(Settings(seed="obj-002", state_path=path))
+    assert any(event["type"] == "fault_configured" for event in restarted.events)
+    traces = [
+        event["trace_id"]
+        for event in restarted.events
+        if event["type"] == "fault_configured"
+    ]
+    assert traces == ["tr_000001_000002"]
+
+
+def test_fault_configure_survives_immediate_post_replace_restart(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("fault-post-replace-01", "synth-ada", "synth-task", "normal")
+    first.configure_fault(FaultConfig(mode="delay", remaining=1))
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["trace"] == 2
+    assert any(event["type"] == "fault_configured" for event in payload["events"])
+    restarted = Store(Settings(seed="obj-002", state_path=path))
+    assert restarted.fault.mode == "none"
+    traces = [
+        event["trace_id"]
+        for event in restarted.events
+        if event["type"] == "fault_configured"
+    ]
+    assert traces == ["tr_000001_000002"]
+    allocated = restarted.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
+    assert allocated.mode == "fail_before_commit"
+    after = [event["trace_id"] for event in restarted.events if event["type"] == "fault_configured"]
+    assert after == ["tr_000001_000002", "tr_000001_000003"]
+
+
+def test_fault_configure_memory_failpoint_does_not_advance_durable_trace(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("fault-memory-0001", "synth-ada", "synth-task", "normal")
+    before = Path(path).read_text(encoding="utf-8")
+    first.arm_failpoint("fault_configure")
+    with pytest.raises(PersistenceCrash):
+        first.configure_fault(FaultConfig(mode="delay", remaining=1))
+    assert Path(path).read_text(encoding="utf-8") == before
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.fault.mode == "none"
+    assert json.loads(Path(path).read_text(encoding="utf-8"))["trace"] == 1
+    assert "fault_configured" not in [event["type"] for event in restored.events]
+
+
+def test_reduced_trace_counter_below_fault_marker_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("fault-counter-0001", "synth-ada", "synth-task", "normal")
+    first.configure_fault(FaultConfig(mode="fail_before_commit", remaining=1))
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert any(event["type"] == "fault_configured" for event in restored.events)
+    original = _corrupt(path, lambda payload: payload.update({"trace": 1}))
+    _assert_restore_fails(path, original, "counters")
 

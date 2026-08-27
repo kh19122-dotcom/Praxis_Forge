@@ -354,16 +354,7 @@ def get_fault() -> FaultState:
 def put_fault(request: Request, config: FaultConfig) -> FaultState:
     epoch = request.state.admission_epoch
     try:
-        fault = store.set_fault(config, epoch=epoch)
-        store.record(
-            store.next_trace_id(epoch=epoch),
-            "fault_configured",
-            epoch=epoch,
-            mode=fault.mode,
-            delay_ms=fault.delay_ms,
-            remaining=fault.remaining,
-            idempotency_key=fault.idempotency_key,
-        )
+        fault = store.configure_fault(config, epoch=epoch)
     except EpochStale as stale:
         _stale(stale.trace_id)
     return fault
