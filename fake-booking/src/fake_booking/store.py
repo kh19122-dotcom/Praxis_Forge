@@ -168,6 +168,11 @@ class Store:
         self._cond.notify_all()
 
     def next_trace_id(self, *, epoch: int | None = None) -> str:
+        """Test helper: persist a markerless trace allocation.
+
+        Production request lifetimes must allocate a trace and write their
+        lifetime marker in the same Store-owned durable transition.
+        """
         with self._lock:
             self._require_epoch_locked(epoch)
             self._trace += 1
@@ -191,14 +196,35 @@ class Store:
     def set_fault(self, config: FaultConfig, *, epoch: int | None = None) -> FaultState:
         with self._lock:
             self._require_epoch_locked(epoch)
-            remaining = 0 if config.mode == "none" else config.remaining
-            self.fault = FaultState(
-                mode=config.mode,
-                delay_ms=config.delay_ms,
-                remaining=remaining,
-                idempotency_key=config.idempotency_key,
-            )
+            self._apply_fault_locked(config)
             return self.fault.model_copy()
+
+    def configure_fault(self, config: FaultConfig, *, epoch: int | None = None) -> FaultState:
+        with self._lock:
+            self._require_epoch_locked(epoch)
+            self._trip_locked("fault_configure")
+            self._apply_fault_locked(config)
+            self._trace += 1
+            trace_id = _format_trace_id(self._epoch if epoch is None else epoch, self._trace)
+            self._append_event_locked(
+                trace_id,
+                "fault_configured",
+                mode=self.fault.mode,
+                delay_ms=self.fault.delay_ms,
+                remaining=self.fault.remaining,
+                idempotency_key=self.fault.idempotency_key,
+            )
+            self._persist_locked()
+            return self.fault.model_copy()
+
+    def _apply_fault_locked(self, config: FaultConfig) -> None:
+        remaining = 0 if config.mode == "none" else config.remaining
+        self.fault = FaultState(
+            mode=config.mode,
+            delay_ms=config.delay_ms,
+            remaining=remaining,
+            idempotency_key=config.idempotency_key,
+        )
 
     def consume_fault(self, idempotency_key: str, *, epoch: int | None = None) -> FaultState:
         with self._lock:
@@ -219,6 +245,7 @@ class Store:
                 remaining=remaining,
                 idempotency_key=current.idempotency_key if remaining > 0 else None,
             )
+            self._persist_locked()
             return current
 
     def list_slots(self, resource_id: str | None, available_only: bool) -> list[dict]:
@@ -361,6 +388,7 @@ class Store:
             "bookings": self.bookings,
             "bookings_by_key": self.bookings_by_key,
             "events": self.events,
+            "fault": self.fault.model_dump(),
             "slot_booking_ids": {
                 slot_id: slot["booking_id"]
                 for slot_id, slot in self.slots.items()
@@ -383,6 +411,10 @@ class Store:
         self._seq = seq
         self._trace = trace
         self._epoch = epoch
+        if "fault" not in payload:
+            self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
+        else:
+            self.fault = _validate_fault_state(payload["fault"])
         for slot in self.slots.values():
             slot["booking_id"] = None
         for booking in self.bookings.values():
@@ -408,6 +440,15 @@ def _parse_trace_id(trace_id: str) -> tuple[int, int] | None:
 
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_fault_state(raw: object) -> FaultState:
+    if not isinstance(raw, dict):
+        raise RestoreError("invalid stored fault")
+    try:
+        return FaultState.model_validate(raw)
+    except ValidationError as exc:
+        raise RestoreError("invalid stored fault") from exc
 
 
 def _validate_booking_snapshot(

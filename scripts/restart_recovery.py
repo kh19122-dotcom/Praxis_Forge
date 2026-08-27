@@ -458,20 +458,20 @@ def run_checks() -> None:
     restart_service("fake-pvs")
     status, body, error = request("GET", f"{BOOKING}/v1/admin/faults")
     booking_fault = expect_status("booking_fault_after_restart", status, body, error, 200)
-    if booking_fault.get("mode") != "none" or booking_fault.get("remaining") != 0:
-        raise CheckFailure(f"booking fault survived restart: {booking_fault!r}")
+    if booking_fault.get("mode") != "fail_before_commit" or booking_fault.get("remaining") != 3:
+        raise CheckFailure(f"booking fault did not survive restart: {booking_fault!r}")
     status, body, error = request("GET", f"{PVS}/v1/admin/faults")
     pvs_fault = expect_status("pvs_fault_after_restart", status, body, error, 200)
-    if pvs_fault.get("mode") != "none" or pvs_fault.get("remaining") != 0:
-        raise CheckFailure(f"pvs fault survived restart: {pvs_fault!r}")
+    if pvs_fault.get("mode") != "ambiguous" or pvs_fault.get("remaining") != 2:
+        raise CheckFailure(f"pvs fault did not survive restart: {pvs_fault!r}")
     slot = first_slot()
     status, body, error = create_booking(
-        BOOKING, slot_id=slot["id"], key="restart-fault-neutral"
+        BOOKING, slot_id=slot["id"], key="restart-fault-survives"
     )
-    expect_status("booking_succeeds_after_fault_restart", status, body, error, 201)
-    status, body, error = create_task(PVS, key="restart-fault-neutral")
-    expect_status("pvs_succeeds_after_fault_restart", status, body, error, 201)
-    check("transient_fault_arming_neutral_after_restart")
+    expect_status("booking_fault_still_armed_after_restart", status, body, error, 503)
+    status, body, error = create_task(PVS, key="restart-fault-survives")
+    expect_status("pvs_fault_still_armed_after_restart", status, body, error, 504)
+    check("configured_fault_survives_restart")
 
 
 def main() -> int:
