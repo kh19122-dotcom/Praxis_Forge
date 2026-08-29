@@ -923,3 +923,35 @@ def test_epoch_zero_fails_closed(tmp_path: Path) -> None:
     assert json.loads(original)["trace"] == 0
     assert json.loads(original)["events"] == []
     _assert_restore_fails(path, original, "sequence counters are invalid")
+
+
+def test_extra_fault_field_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    first.configure_fault(
+        FaultConfig(mode="delay", delay_ms=17, remaining=2, idempotency_key="synth-keep-fault")
+    )
+    original = _corrupt(path, lambda payload: payload["fault"].update({"unexpected": True}))
+    _assert_restore_fails(path, original, "invalid stored fault")
+
+
+def test_valid_current_fault_object_still_restores(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    first.configure_fault(
+        FaultConfig(mode="delay", delay_ms=17, remaining=2, idempotency_key="synth-keep-fault")
+    )
+    original = Path(path).read_text(encoding="utf-8")
+    payload = json.loads(original)
+    assert payload["fault"] == {
+        "mode": "delay",
+        "delay_ms": 17,
+        "remaining": 2,
+        "idempotency_key": "synth-keep-fault",
+    }
+    restored = Store(Settings(seed="obj-001", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == original
+    assert restored.fault.mode == "delay"
+    assert restored.fault.delay_ms == 17
+    assert restored.fault.remaining == 2
+    assert restored.fault.idempotency_key == "synth-keep-fault"

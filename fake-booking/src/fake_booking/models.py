@@ -57,6 +57,8 @@ class FaultConfig(BaseModel):
 
 
 class FaultState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     mode: FaultMode
     delay_ms: int
     remaining: int
