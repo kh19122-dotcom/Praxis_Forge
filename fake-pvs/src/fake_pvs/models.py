@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 FaultMode = Literal["none", "fail_before_commit", "delay", "ambiguous"]
 PatientStatus = Literal["active"]
@@ -84,6 +84,8 @@ class FaultState(BaseModel):
 
 
 class Event(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     seq: int
     trace_id: str
     type: str
