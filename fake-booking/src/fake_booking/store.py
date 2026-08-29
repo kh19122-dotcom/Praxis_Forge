@@ -5,7 +5,7 @@ from hashlib import sha256
 from threading import Condition, Lock
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fake_booking.catalog import generate_slots
 from fake_booking.ids import booking_id
@@ -16,6 +16,34 @@ from fake_booking.settings import Settings
 STATE_SCHEMA = "praxis-forge.fake-booking-state.v1"
 TRACE_RE = re.compile(r"^tr_([0-9]{6,})_([0-9]{6,})$")
 
+SNAPSHOT_KEYS = frozenset(
+    {
+        "schema",
+        "seed",
+        "seq",
+        "trace",
+        "epoch",
+        "bookings",
+        "bookings_by_key",
+        "events",
+        "fault",
+        "slot_booking_ids",
+    }
+)
+EVENT_TYPES = frozenset(
+    {
+        "booking_requested",
+        "booking_committed",
+        "booking_replayed",
+        "conflict",
+        "commit_skipped",
+        "fault_configured",
+        "fault_injected",
+        "response_delayed",
+        "response_suppressed",
+    }
+)
+
 
 class EpochStale(Exception):
     def __init__(self, trace_id: str = "tr_000000") -> None:
@@ -24,6 +52,8 @@ class EpochStale(Exception):
 
 
 class StoredBooking(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     slot_id: str
     resource_id: str
@@ -444,6 +474,9 @@ def _validate_booking_snapshot(
     settings: Settings,
     slots: dict[str, dict],
 ) -> tuple[dict[str, dict], dict[str, str], list[dict], int, int, dict[str, str], int]:
+    extra_keys = set(payload) - SNAPSHOT_KEYS
+    if extra_keys:
+        raise RestoreError("unknown snapshot field")
     if payload.get("schema") != STATE_SCHEMA:
         raise RestoreError("unsupported state schema")
     if payload.get("seed") != settings.seed:
@@ -465,7 +498,7 @@ def _validate_booking_snapshot(
         or not _is_int(epoch)
         or seq < 0
         or trace < 0
-        or epoch < 0
+        or epoch < 1
     ):
         raise RestoreError("sequence counters are invalid")
 
@@ -559,7 +592,7 @@ def _validate_events(events_raw: list[object], seq: int, trace: int, epoch: int)
             raise RestoreError("event trace epoch does not match snapshot epoch")
         if local_trace < 1:
             raise RestoreError("event local trace is not allocated")
-        if not event.type or not isinstance(event.type, str):
+        if event.type not in EVENT_TYPES:
             raise RestoreError("event type is invalid")
         if not isinstance(event.details, dict):
             raise RestoreError("event details must be an object")

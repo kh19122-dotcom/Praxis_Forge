@@ -718,6 +718,7 @@ def test_valid_empty_trace_zero_still_restores(tmp_path: Path) -> None:
     restored = Store(Settings(seed="obj-002", state_path=path))
     assert restored.tasks == {}
     assert restored.events == []
+    assert payload["epoch"] == 1
     created = restored.create_task("empty-baseline-0001", "synth-ada", "synth-task", "normal")
     assert created["kind"] == "created"
     traces = {event["trace_id"] for event in restored.events}
@@ -848,3 +849,88 @@ def test_idempotency_filtered_fault_is_not_consumed(tmp_path: Path) -> None:
     assert restored.fault.remaining == 2
     assert restored.fault.idempotency_key == "synth-key-a"
 
+def test_unknown_snapshot_field_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("extra-snap-00001", "synth-ada", "synth-task", "normal")
+    original = _corrupt(path, lambda payload: payload.update({"unexpected": True}))
+    _assert_restore_fails(path, original, "unknown snapshot field")
+
+
+def test_extra_stored_task_field_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_task("extra-task-00001", "synth-ada", "synth-task", "normal")
+    task_id = created["task"]["id"]
+
+    def mutate(payload: dict) -> None:
+        payload["tasks"][task_id]["unexpected"] = "x"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "invalid stored task")
+
+
+def test_extra_event_field_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("extra-event-0001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        payload["events"][0]["unexpected"] = "x"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "malformed event")
+
+
+def test_unknown_event_type_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("bad-type-000001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        payload["events"][0]["type"] = "not_a_generated_event"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "event type is invalid")
+
+
+def test_epoch_zero_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    Store(Settings(seed="obj-002", state_path=path))
+    original = _corrupt(path, lambda payload: payload.update({"epoch": 0}))
+    assert json.loads(original)["seq"] == 0
+    assert json.loads(original)["trace"] == 0
+    assert json.loads(original)["events"] == []
+    _assert_restore_fails(path, original, "sequence counters are invalid")
+
+
+def test_extra_fault_field_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.configure_fault(
+        FaultConfig(mode="delay", delay_ms=17, remaining=2, idempotency_key="synth-keep-fault")
+    )
+    original = _corrupt(path, lambda payload: payload["fault"].update({"unexpected": True}))
+    _assert_restore_fails(path, original, "invalid stored fault")
+
+
+def test_valid_current_fault_object_still_restores(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.configure_fault(
+        FaultConfig(mode="delay", delay_ms=17, remaining=2, idempotency_key="synth-keep-fault")
+    )
+    original = Path(path).read_text(encoding="utf-8")
+    payload = json.loads(original)
+    assert payload["fault"] == {
+        "mode": "delay",
+        "delay_ms": 17,
+        "remaining": 2,
+        "idempotency_key": "synth-keep-fault",
+    }
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == original
+    assert restored.fault.mode == "delay"
+    assert restored.fault.delay_ms == 17
+    assert restored.fault.remaining == 2
+    assert restored.fault.idempotency_key == "synth-keep-fault"
