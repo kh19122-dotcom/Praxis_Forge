@@ -168,18 +168,6 @@ class Store:
             self._in_flight[epoch] = remaining - 1
         self._cond.notify_all()
 
-    def next_trace_id(self, *, epoch: int | None = None) -> str:
-        """Test helper: persist a markerless trace allocation.
-
-        Production request lifetimes must allocate a trace and write their
-        lifetime marker in the same Store-owned durable transition.
-        """
-        with self._lock:
-            self._require_epoch_locked(epoch)
-            self._trace += 1
-            self._persist_locked()
-            return _format_trace_id(self._epoch if epoch is None else epoch, self._trace)
-
     def record(
         self,
         trace_id: str,
@@ -550,7 +538,7 @@ def _validate_events(events_raw: list[object], seq: int, trace: int, epoch: int)
             raise RestoreError("event details must be an object")
         max_local_trace = max(max_local_trace, local_trace)
         events.append(event.model_dump())
-    if seq != len(events) or max_local_trace > trace:
+    if seq != len(events) or max_local_trace > trace or (events and max_local_trace != trace):
         raise RestoreError("counters do not dominate restored events")
     return events
 

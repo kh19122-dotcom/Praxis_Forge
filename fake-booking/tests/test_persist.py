@@ -695,6 +695,33 @@ def test_fault_configure_memory_failpoint_does_not_advance_durable_trace(tmp_pat
     assert "fault_configured" not in [event["type"] for event in restored.events]
 
 
+
+
+def test_markerless_trace_highwater_rejected_rolled_equals_valid_history(tmp_path: Path) -> None:
+    path = str(tmp_path / "booking.json")
+    first = Store(Settings(seed="obj-001", state_path=path))
+    slot_id = _first_slot_id(first)
+    created = first.create_booking("markerless-hw-0001", slot_id, "synth-ada")
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["trace"] == 1
+    assert {event["trace_id"] for event in payload["events"]} == {"tr_000001_000001"}
+    original = _corrupt(path, lambda data: data.update({"trace": 2}))
+    _assert_restore_fails(path, original, "counters")
+    rolled = _corrupt(path, lambda data: data.update({"trace": 1}))
+    restored = Store(Settings(seed="obj-001", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == rolled
+    assert restored.get_booking(created["booking"]["id"]) is not None
+    accepted = {event["trace_id"] for event in restored.events}
+    assert accepted == {"tr_000001_000001"}
+    assert not hasattr(Store, "next_trace_id")
+    other_slot = next(sid for sid in restored.slots if sid != slot_id)
+    follow = restored.create_booking("markerless-hw-0002", other_slot, "synth-ben")
+    assert follow["kind"] == "created"
+    follow_traces = {event["trace_id"] for event in restored.events} - accepted
+    assert follow_traces == {"tr_000001_000002"}
+    assert "tr_000001_000002" not in accepted
+
+
 def test_reduced_trace_counter_below_fault_marker_fails_closed(tmp_path: Path) -> None:
     path = str(tmp_path / "booking.json")
     first = Store(Settings(seed="obj-001", state_path=path))
