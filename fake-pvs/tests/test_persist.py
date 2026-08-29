@@ -325,13 +325,31 @@ def test_duplicate_committed_event_fails_closed(tmp_path: Path) -> None:
 def test_object_missing_committed_evidence_fails_closed(tmp_path: Path) -> None:
     path = str(tmp_path / "pvs.json")
     first = Store(Settings(seed="obj-002", state_path=path))
-    first.create_task("missing-ev-0001", "synth-ada", "synth-task", "normal")
+    epoch, trace_id = first.begin_request(
+        "task_requested",
+        idempotency_key="missing-ev-0001",
+        patient_id="synth-ada",
+        title="synth-task",
+        priority="normal",
+    )
+    first.create_task(
+        "missing-ev-0001",
+        "synth-ada",
+        "synth-task",
+        "normal",
+        epoch=epoch,
+        trace_id=trace_id,
+    )
+    first.finish_request(epoch)
 
     def mutate(payload: dict) -> None:
         payload["events"] = [
             event for event in payload["events"] if event["type"] != "task_committed"
         ]
         payload["seq"] = len(payload["events"])
+        payload["trace"] = max(
+            int(event["trace_id"].rsplit("_", 1)[1]) for event in payload["events"]
+        )
 
     original = _corrupt(path, mutate)
     _assert_restore_fails(path, original, "without matching committed evidence")
@@ -678,6 +696,54 @@ def test_fault_configure_memory_failpoint_does_not_advance_durable_trace(tmp_pat
     assert "fault_configured" not in [event["type"] for event in restored.events]
 
 
+
+
+def test_empty_event_trace_one_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    Store(Settings(seed="obj-002", state_path=path))
+    original = _corrupt(path, lambda data: data.update({"trace": 1}))
+    assert json.loads(original)["events"] == []
+    assert json.loads(original)["seq"] == 0
+    _assert_restore_fails(path, original, "counters")
+    assert Path(path).read_bytes() == original.encode("utf-8")
+
+
+def test_valid_empty_trace_zero_still_restores(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    Store(Settings(seed="obj-002", state_path=path))
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["seq"] == 0
+    assert payload["trace"] == 0
+    assert payload["events"] == []
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert restored.tasks == {}
+    assert restored.events == []
+    created = restored.create_task("empty-baseline-0001", "synth-ada", "synth-task", "normal")
+    assert created["kind"] == "created"
+    traces = {event["trace_id"] for event in restored.events}
+    assert traces == {"tr_000001_000001"}
+    assert not hasattr(Store, "next_trace_id")
+
+
+def test_rejected_empty_trace_one_does_not_prove_reissue_acceptable(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    Store(Settings(seed="obj-002", state_path=path))
+    rejected = _corrupt(path, lambda data: data.update({"trace": 1}))
+    _assert_restore_fails(path, rejected, "counters")
+    baseline = _corrupt(path, lambda data: data.update({"trace": 0}))
+    restored = Store(Settings(seed="obj-002", state_path=path))
+    assert Path(path).read_text(encoding="utf-8") == baseline
+    payload = json.loads(baseline)
+    assert payload["seq"] == 0
+    assert payload["trace"] == 0
+    assert payload["events"] == []
+    created = restored.create_task("empty-rejected-0001", "synth-ada", "synth-task", "normal")
+    assert created["kind"] == "created"
+    traces = {event["trace_id"] for event in restored.events}
+    assert traces == {"tr_000001_000001"}
+    assert not hasattr(Store, "next_trace_id")
+    Path(path).write_text(rejected, encoding="utf-8")
+    _assert_restore_fails(path, rejected, "counters")
 
 
 def test_markerless_trace_highwater_rejected_rolled_equals_valid_history(tmp_path: Path) -> None:

@@ -565,7 +565,7 @@ def _validate_events(events_raw: list[object], seq: int, trace: int, epoch: int)
             raise RestoreError("event details must be an object")
         max_local_trace = max(max_local_trace, local_trace)
         events.append(event.model_dump())
-    if seq != len(events) or max_local_trace > trace or (events and max_local_trace != trace):
+    if seq != len(events) or max_local_trace != trace:
         raise RestoreError("counters do not dominate restored events")
     return events
 
