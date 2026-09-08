@@ -7,8 +7,10 @@ info:
 
     Identifiers and seeded corpus records are derived from `FORGE_SEED` (default
     `obj-002`) and a fixed synthetic calendar origin of `2030-01-06T00:00:00Z`.
-    Patient identifiers, task titles, and search keys must use the `synth-`
-    prefix. This service is not a production PVS and makes no vendor-compatibility
+    Patient identifiers, search keys, and task titles must use the `synth-`
+    prefix. Synthetic clinical documents use opaque Praxis `is_ref` labels
+    (`^[a-z][a-z0-9_-]{0,63}$`) and persist exact UTF-8 `rendered_text`.
+    This service is not a production PVS and makes no vendor-compatibility
     or regulatory claims.
 servers:
   - url: http://127.0.0.1:8081
@@ -171,6 +173,62 @@ paths:
                 $ref: "#/components/schemas/Task"
         "404":
           description: Unknown task
+  /v1/clinical-documents:
+    post:
+      summary: Create an immutable synthetic clinical document
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClinicalDocumentCreate"
+      responses:
+        "201":
+          description: Document committed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClinicalDocument"
+        "200":
+          description: Idempotent replay of an existing document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClinicalDocument"
+        "409":
+          description: Idempotency conflict or logical duplicate
+        "422":
+          description: validation_error
+        "503":
+          description: fail_before_commit — remote commit was not attempted
+        "504":
+          description: ambiguous_outcome — inspect /v1/admin/events
+  /v1/clinical-documents/{document_id}:
+    get:
+      summary: Read a synthetic clinical document by id
+      parameters:
+        - in: path
+          name: document_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClinicalDocument"
+        "404":
+          description: Unknown document
   /v1/admin/events:
     get:
       summary: Observable transaction/event trace
@@ -215,7 +273,7 @@ paths:
                 $ref: "#/components/schemas/FaultState"
   /v1/admin/reset:
     post:
-      summary: Reset corpus, tasks, events, and faults
+      summary: Reset corpus, tasks, documents, events, and faults
       responses:
         "200":
           description: Reset complete
@@ -257,6 +315,66 @@ components:
           const: open
         idempotency_key:
           type: string
+    ClinicalDocumentCreate:
+      type: object
+      required:
+        - synthetic_patient_id
+        - synthetic_visit_id
+        - document_ref
+        - content_hash
+        - rendered_text
+      properties:
+        synthetic_patient_id:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,63}$"
+        synthetic_visit_id:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,63}$"
+        document_ref:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,63}$"
+        content_hash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        rendered_text:
+          type: string
+    ClinicalDocument:
+      type: object
+      required:
+        - id
+        - synthetic_patient_id
+        - synthetic_visit_id
+        - document_ref
+        - content_hash
+        - rendered_text
+        - rendered_text_sha256
+        - idempotency_key
+        - status
+      properties:
+        id:
+          type: string
+        synthetic_patient_id:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,63}$"
+        synthetic_visit_id:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,63}$"
+        document_ref:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,63}$"
+        content_hash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        rendered_text:
+          type: string
+        rendered_text_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        idempotency_key:
+          type: string
+        status:
+          type: string
+          const: committed
     Patient:
       type: object
       required: [id, cohort, site, status]

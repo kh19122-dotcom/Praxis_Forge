@@ -333,6 +333,102 @@
         }
       }
     },
+    "/v1/clinical-documents": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Create Clinical Document",
+        "operationId": "create_clinical_document_v1_clinical_documents_post",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClinicalDocumentCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clinical-documents/{document_id}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get Clinical Document",
+        "operationId": "get_clinical_document_v1_clinical_documents__document_id__get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClinicalDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/events": {
       "get": {
         "tags": [
@@ -466,6 +562,104 @@
   },
   "components": {
     "schemas": {
+      "ClinicalDocument": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "synthetic_patient_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Synthetic Patient Id"
+          },
+          "synthetic_visit_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Synthetic Visit Id"
+          },
+          "document_ref": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Document Ref"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "rendered_text": {
+            "type": "string",
+            "title": "Rendered Text"
+          },
+          "rendered_text_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Rendered Text Sha256"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "status": {
+            "type": "string",
+            "const": "committed",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "synthetic_patient_id",
+          "synthetic_visit_id",
+          "document_ref",
+          "content_hash",
+          "rendered_text",
+          "rendered_text_sha256",
+          "idempotency_key",
+          "status"
+        ],
+        "title": "ClinicalDocument"
+      },
+      "ClinicalDocumentCreate": {
+        "properties": {
+          "synthetic_patient_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Synthetic Patient Id"
+          },
+          "synthetic_visit_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Synthetic Visit Id"
+          },
+          "document_ref": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Document Ref"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "rendered_text": {
+            "type": "string",
+            "title": "Rendered Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "synthetic_patient_id",
+          "synthetic_visit_id",
+          "document_ref",
+          "content_hash",
+          "rendered_text"
+        ],
+        "title": "ClinicalDocumentCreate"
+      },
       "Encounter": {
         "properties": {
           "id": {
@@ -556,6 +750,7 @@
             "title": "Details"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "seq",
@@ -659,6 +854,7 @@
             "title": "Idempotency Key"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "mode",
