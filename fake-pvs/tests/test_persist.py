@@ -58,6 +58,75 @@ def test_durable_task_survives_new_store_instance(tmp_path: Path) -> None:
     assert second.fault.remaining == 0
     assert any(event["type"] == "task_committed" for event in second.events)
 
+def test_durable_document_survives_new_store_instance(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_document(
+        "persist-doc-0001",
+        "visit-ada",
+        "visit-one",
+        "note-alpha",
+        "a" * 64,
+        "café",
+    )
+    document_id = created["document"]["id"]
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert document_id in payload["documents"]
+    assert payload["documents_by_key"]["persist-doc-0001"] == document_id
+    assert any(event["type"] == "document_committed" for event in payload["events"])
+
+    second = Store(Settings(seed="obj-002", state_path=path))
+    restored = second.get_document(document_id)
+    assert restored is not None
+    assert restored["rendered_text"] == "café"
+    replay = second.create_document(
+        "persist-doc-0001",
+        "visit-ada",
+        "visit-one",
+        "note-alpha",
+        "a" * 64,
+        "café",
+    )
+    assert replay["kind"] == "replay"
+    assert replay["document"]["id"] == document_id
+    conflict = second.create_document(
+        "persist-doc-0001",
+        "visit-ada",
+        "visit-one",
+        "note-alpha",
+        "a" * 64,
+        "other",
+    )
+    assert conflict["kind"] == "idempotency_conflict"
+    duplicate = second.create_document(
+        "persist-doc-0002",
+        "visit-ada",
+        "visit-one",
+        "note-alpha",
+        "a" * 64,
+        "café",
+    )
+    assert duplicate["kind"] == "logical_duplicate"
+
+
+def test_extra_stored_document_field_fails_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    created = first.create_document(
+        "extra-doc-00001",
+        "visit-ada",
+        "visit-one",
+        "note-alpha",
+        "a" * 64,
+        "text",
+    )
+    document_id = created["document"]["id"]
+
+    def mutate(payload: dict) -> None:
+        payload["documents"][document_id]["unexpected"] = "x"
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "invalid stored document")
 
 def test_admin_reset_clears_durable_pvs_state(tmp_path: Path) -> None:
     path = str(tmp_path / "pvs.json")
@@ -163,6 +232,23 @@ def test_absent_state_file_initializes_baseline(tmp_path: Path) -> None:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     assert payload["tasks"] == {}
     assert payload["seed"] == "obj-002"
+    assert payload["documents"] == {}
+    assert payload["documents_by_key"] == {}
+    assert payload["documents_by_logical"] == {}
+
+
+def test_missing_document_maps_fail_closed(tmp_path: Path) -> None:
+    path = str(tmp_path / "pvs.json")
+    first = Store(Settings(seed="obj-002", state_path=path))
+    first.create_task("doc-maps-0001", "synth-ada", "synth-task", "normal")
+
+    def mutate(payload: dict) -> None:
+        payload.pop("documents")
+        payload.pop("documents_by_key")
+        payload.pop("documents_by_logical")
+
+    original = _corrupt(path, mutate)
+    _assert_restore_fails(path, original, "unknown snapshot field|document maps")
 
 
 def _committed_event(payload: dict) -> dict:

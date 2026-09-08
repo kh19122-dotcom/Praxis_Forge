@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
@@ -10,6 +11,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from fake_pvs.models import (
     SYNTH_ID_PATTERN,
+    ClinicalDocument,
+    ClinicalDocumentCreate,
     Encounter,
     EncounterList,
     ErrorBody,
@@ -78,6 +81,7 @@ app.add_middleware(
     routes=frozenset(
         {
             ("POST", "/v1/tasks"),
+            ("POST", "/v1/clinical-documents"),
             ("PUT", "/v1/admin/faults"),
         }
     ),
@@ -104,13 +108,20 @@ async def validation_exception_handler(
     _request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
+    errors = []
+    for item in exc.errors():
+        cleaned = dict(item)
+        ctx = cleaned.get("ctx")
+        if isinstance(ctx, dict) and "error" in ctx:
+            cleaned["ctx"] = {**ctx, "error": str(ctx["error"])}
+        errors.append(cleaned)
     return JSONResponse(
         status_code=422,
         content=ErrorBody(
             error="validation_error",
             message="Request failed schema validation.",
             trace_id="tr_000000",
-            details={"errors": exc.errors()},
+            details={"errors": errors},
         ).model_dump(),
     )
 
@@ -165,6 +176,21 @@ def _public_task(task: dict) -> Task:
         priority=task["priority"],
         status=task["status"],
         idempotency_key=task["idempotency_key"],
+    )
+
+
+def _public_document(document: dict) -> ClinicalDocument:
+    digest = sha256(document["rendered_text"].encode("utf-8")).hexdigest()
+    return ClinicalDocument(
+        id=document["id"],
+        synthetic_patient_id=document["synthetic_patient_id"],
+        synthetic_visit_id=document["synthetic_visit_id"],
+        document_ref=document["document_ref"],
+        content_hash=document["content_hash"],
+        rendered_text=document["rendered_text"],
+        rendered_text_sha256=digest,
+        idempotency_key=document["idempotency_key"],
+        status="committed",
     )
 
 
@@ -332,6 +358,126 @@ def get_task(task_id: str) -> Task:
     if task is None:
         _error(404, "task_not_found", "Unknown task.", "tr_000000", task_id=task_id)
     return _public_task(task)
+
+
+@app.post(
+    "/v1/clinical-documents",
+    response_model=ClinicalDocument,
+    status_code=201,
+    tags=["documents"],
+)
+async def create_clinical_document(
+    request: Request,
+    body: ClinicalDocumentCreate,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=128),
+) -> ClinicalDocument:
+    try:
+        epoch, trace_id = store.begin_request(
+            "document_requested",
+            epoch=request.state.admission_epoch,
+            idempotency_key=idempotency_key,
+            synthetic_patient_id=body.synthetic_patient_id,
+            synthetic_visit_id=body.synthetic_visit_id,
+            document_ref=body.document_ref,
+            content_hash=body.content_hash,
+        )
+        fault = store.consume_fault(idempotency_key, epoch=epoch)
+        if fault.mode == "fail_before_commit":
+            store.record(trace_id, "fault_injected", epoch=epoch, mode=fault.mode)
+            store.record(trace_id, "commit_skipped", epoch=epoch, reason="fail_before_commit")
+            _error(
+                503,
+                "fail_before_commit",
+                "Remote commit was not attempted.",
+                trace_id,
+                committed=False,
+            )
+        if fault.mode in {"delay", "ambiguous"} and fault.delay_ms:
+            await asyncio.sleep(fault.delay_ms / 1000)
+            store.record(
+                trace_id,
+                "response_delayed",
+                epoch=epoch,
+                delay_ms=fault.delay_ms,
+                mode=fault.mode,
+            )
+        result = store.create_document(
+            idempotency_key,
+            body.synthetic_patient_id,
+            body.synthetic_visit_id,
+            body.document_ref,
+            body.content_hash,
+            body.rendered_text,
+            epoch=epoch,
+            trace_id=trace_id,
+        )
+    except EpochStale as stale:
+        _stale(stale.trace_id)
+
+    kind = result["kind"]
+    if kind == "idempotency_conflict":
+        _error(
+            409,
+            "idempotency_conflict",
+            "Idempotency key was reused with a different request body.",
+            trace_id,
+            existing_id=result["document"]["id"],
+            committed=False,
+        )
+    if kind == "logical_duplicate":
+        _error(
+            409,
+            "logical_duplicate",
+            "A document with the same logical identity already exists.",
+            trace_id,
+            existing_id=result["document"]["id"],
+            committed=False,
+        )
+
+    document = result["document"]
+    if not store.epoch_is_current(epoch):
+        _stale(trace_id)
+    if fault.mode == "ambiguous":
+        try:
+            store.record(
+                trace_id,
+                "response_suppressed",
+                epoch=epoch,
+                reason="ambiguous_outcome",
+                document_id=document["id"],
+                committed=True,
+            )
+        except EpochStale as stale:
+            _stale(stale.trace_id)
+        _error(
+            504,
+            "ambiguous_outcome",
+            "Remote effect may have committed; client must inspect Forge evidence.",
+            trace_id,
+            committed=None,
+        )
+    if kind == "replay":
+        response.status_code = 200
+    return _public_document(document)
+
+
+@app.get(
+    "/v1/clinical-documents/{document_id}",
+    response_model=ClinicalDocument,
+    tags=["documents"],
+)
+def get_clinical_document(document_id: str) -> ClinicalDocument:
+    document = store.get_document(document_id)
+    if document is None:
+        _error(
+            404,
+            "document_not_found",
+            "Unknown document.",
+            "tr_000000",
+            document_id=document_id,
+        )
+    return _public_document(document)
 
 
 @app.get("/v1/admin/events", response_model=EventList, tags=["admin"])

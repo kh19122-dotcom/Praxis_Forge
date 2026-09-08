@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+import json
 import re
 from hashlib import sha256
 from threading import Condition, Lock
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fake_pvs.corpus import generate_encounters, generate_patients
-from fake_pvs.ids import task_id
-from fake_pvs.models import SYNTH_ID_PATTERN, Event, FaultConfig, FaultState
+from fake_pvs.ids import document_id, document_request_hash, task_id
+from fake_pvs.models import (
+    CONTENT_HASH_PATTERN,
+    IS_REF_PATTERN,
+    SHA256_HEX_PATTERN,
+    SYNTH_ID_PATTERN,
+    Event,
+    FaultConfig,
+    FaultState,
+    RenderedText,
+    validate_rendered_text,
+)
 from fake_pvs.persist import PersistenceCrash, RestoreError, read_state, write_state
 from fake_pvs.settings import Settings
 
@@ -25,6 +36,9 @@ SNAPSHOT_KEYS = frozenset(
         "epoch",
         "tasks",
         "tasks_by_key",
+        "documents",
+        "documents_by_key",
+        "documents_by_logical",
         "events",
         "fault",
     }
@@ -34,6 +48,9 @@ EVENT_TYPES = frozenset(
         "task_requested",
         "task_committed",
         "task_replayed",
+        "document_requested",
+        "document_committed",
+        "document_replayed",
         "conflict",
         "commit_skipped",
         "fault_configured",
@@ -63,6 +80,21 @@ class StoredTask(BaseModel):
     request_hash: str = Field(min_length=64, max_length=64)
 
 
+class StoredDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    synthetic_patient_id: str = Field(pattern=IS_REF_PATTERN)
+    synthetic_visit_id: str = Field(pattern=IS_REF_PATTERN)
+    document_ref: str = Field(pattern=IS_REF_PATTERN)
+    content_hash: str = Field(pattern=CONTENT_HASH_PATTERN)
+    rendered_text: RenderedText
+    rendered_text_sha256: str = Field(pattern=SHA256_HEX_PATTERN)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    request_hash: str = Field(min_length=64, max_length=64)
+    status: Literal["committed"]
+
+
 class Store:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -77,6 +109,9 @@ class Store:
         self.encounters: dict[str, dict] = {}
         self.tasks: dict[str, dict] = {}
         self.tasks_by_key: dict[str, str] = {}
+        self.documents: dict[str, dict] = {}
+        self.documents_by_key: dict[str, str] = {}
+        self.documents_by_logical: dict[str, str] = {}
         self.events: list[dict] = []
         self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
         self._seq = 0
@@ -150,6 +185,9 @@ class Store:
         self.encounters = generate_encounters(self.settings)
         self.tasks = {}
         self.tasks_by_key = {}
+        self.documents = {}
+        self.documents_by_key = {}
+        self.documents_by_logical = {}
         self.events = []
         self.fault = FaultState(mode="none", delay_ms=50, remaining=0, idempotency_key=None)
         self._seq = 0
@@ -310,6 +348,11 @@ class Store:
             task = self.tasks.get(task_id_value)
             return dict(task) if task else None
 
+    def get_document(self, document_id_value: str) -> dict | None:
+        with self._lock:
+            document = self.documents.get(document_id_value)
+            return dict(document) if document else None
+
     def create_task(
         self,
         idempotency_key: str,
@@ -379,6 +422,105 @@ class Store:
             self._persist_locked()
             return {"kind": "created", "task": dict(task)}
 
+    def create_document(
+        self,
+        idempotency_key: str,
+        synthetic_patient_id: str,
+        synthetic_visit_id: str,
+        document_ref: str,
+        content_hash: str,
+        rendered_text: str,
+        *,
+        epoch: int | None = None,
+        trace_id: str | None = None,
+    ) -> dict:
+        stored_text = validate_rendered_text(rendered_text)
+        stored_bytes = stored_text.encode("utf-8")
+        rendered_text_sha256 = sha256(stored_bytes).hexdigest()
+        request_hash = document_request_hash(
+            synthetic_patient_id,
+            synthetic_visit_id,
+            document_ref,
+            content_hash,
+            rendered_text_sha256,
+        )
+        logical = _document_logical_key(
+            synthetic_patient_id,
+            synthetic_visit_id,
+            document_ref,
+            content_hash,
+        )
+        with self._lock:
+            self._require_epoch_locked(epoch, trace_id or "tr_000000")
+            if trace_id is None:
+                self._trace += 1
+                trace_id = _format_trace_id(self._epoch if epoch is None else epoch, self._trace)
+
+            existing_id = self.documents_by_key.get(idempotency_key)
+            if existing_id:
+                existing = self.documents[existing_id]
+                if existing["request_hash"] != request_hash:
+                    self._append_event_locked(
+                        trace_id,
+                        "conflict",
+                        reason="idempotency_conflict",
+                        existing_id=existing["id"],
+                    )
+                    self._persist_locked()
+                    return {"kind": "idempotency_conflict", "document": dict(existing)}
+                self._append_event_locked(
+                    trace_id,
+                    "document_replayed",
+                    document_id=existing["id"],
+                    synthetic_patient_id=existing["synthetic_patient_id"],
+                    idempotency_key=idempotency_key,
+                    committed=True,
+                )
+                self._persist_locked()
+                return {"kind": "replay", "document": dict(existing)}
+
+            logical_id = self.documents_by_logical.get(logical)
+            if logical_id:
+                existing = self.documents[logical_id]
+                self._append_event_locked(
+                    trace_id,
+                    "conflict",
+                    reason="logical_duplicate",
+                    existing_id=existing["id"],
+                )
+                self._persist_locked()
+                return {"kind": "logical_duplicate", "document": dict(existing)}
+
+            new_id = document_id(self.settings.seed, idempotency_key)
+            document = {
+                "id": new_id,
+                "synthetic_patient_id": synthetic_patient_id,
+                "synthetic_visit_id": synthetic_visit_id,
+                "document_ref": document_ref,
+                "content_hash": content_hash,
+                "rendered_text": stored_text,
+                "rendered_text_sha256": rendered_text_sha256,
+                "idempotency_key": idempotency_key,
+                "request_hash": request_hash,
+                "status": "committed",
+            }
+            self.documents[new_id] = document
+            self.documents_by_key[idempotency_key] = new_id
+            self.documents_by_logical[logical] = new_id
+            self._append_event_locked(
+                trace_id,
+                "document_committed",
+                document_id=new_id,
+                synthetic_patient_id=synthetic_patient_id,
+                synthetic_visit_id=synthetic_visit_id,
+                document_ref=document_ref,
+                idempotency_key=idempotency_key,
+                committed=True,
+            )
+            self._trip_locked("commit")
+            self._persist_locked()
+            return {"kind": "created", "document": dict(document)}
+
     def _append_event_locked(self, trace_id: str, event_type: str, **details: object) -> dict:
         self._seq += 1
         event = {
@@ -415,6 +557,9 @@ class Store:
             "epoch": self._epoch,
             "tasks": self.tasks,
             "tasks_by_key": self.tasks_by_key,
+            "documents": self.documents,
+            "documents_by_key": self.documents_by_key,
+            "documents_by_logical": self.documents_by_logical,
             "events": self.events,
             "fault": self.fault.model_dump(),
         }
@@ -426,11 +571,22 @@ class Store:
         payload = read_state(path)
         if payload is None:
             return False
-        tasks, tasks_by_key, events, seq, trace, epoch = _validate_pvs_snapshot(
-            payload, self.settings, self.patients
-        )
+        (
+            tasks,
+            tasks_by_key,
+            documents,
+            documents_by_key,
+            documents_by_logical,
+            events,
+            seq,
+            trace,
+            epoch,
+        ) = _validate_pvs_snapshot(payload, self.settings, self.patients)
         self.tasks = tasks
         self.tasks_by_key = tasks_by_key
+        self.documents = documents
+        self.documents_by_key = documents_by_key
+        self.documents_by_logical = documents_by_logical
         self.events = events
         self._seq = seq
         self._trace = trace
@@ -457,6 +613,19 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _document_logical_key(
+    synthetic_patient_id: str,
+    synthetic_visit_id: str,
+    document_ref: str,
+    content_hash: str,
+) -> str:
+    return json.dumps(
+        [synthetic_patient_id, synthetic_visit_id, document_ref, content_hash],
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
 def _validate_fault_state(raw: object) -> FaultState:
     if not isinstance(raw, dict):
         raise RestoreError("invalid stored fault")
@@ -470,7 +639,17 @@ def _validate_pvs_snapshot(
     payload: dict[str, Any],
     settings: Settings,
     patients: dict[str, dict],
-) -> tuple[dict[str, dict], dict[str, str], list[dict], int, int, int]:
+) -> tuple[
+    dict[str, dict],
+    dict[str, str],
+    dict[str, dict],
+    dict[str, str],
+    dict[str, str],
+    list[dict],
+    int,
+    int,
+    int,
+]:
     extra_keys = set(payload) - SNAPSHOT_KEYS
     if extra_keys:
         raise RestoreError("unknown snapshot field")
@@ -480,12 +659,21 @@ def _validate_pvs_snapshot(
         raise RestoreError("seed mismatch")
     tasks_raw = payload.get("tasks")
     tasks_by_key_raw = payload.get("tasks_by_key")
+    documents_raw = payload.get("documents")
+    documents_by_key_raw = payload.get("documents_by_key")
+    documents_by_logical_raw = payload.get("documents_by_logical")
     events_raw = payload.get("events")
     seq = payload.get("seq")
     trace = payload.get("trace")
     epoch = payload.get("epoch")
     if not isinstance(tasks_raw, dict) or not isinstance(tasks_by_key_raw, dict):
         raise RestoreError("task maps must be objects")
+    if (
+        not isinstance(documents_raw, dict)
+        or not isinstance(documents_by_key_raw, dict)
+        or not isinstance(documents_by_logical_raw, dict)
+    ):
+        raise RestoreError("document maps must be objects")
     if not isinstance(events_raw, list):
         raise RestoreError("events must be a list")
     if (
@@ -537,10 +725,94 @@ def _validate_pvs_snapshot(
     if rebuilt_keys != tasks_by_key:
         raise RestoreError("idempotency map is inconsistent with tasks")
 
+    documents: dict[str, dict] = {}
+    for key, value in documents_raw.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            raise RestoreError("invalid document record")
+        try:
+            stored_document = StoredDocument.model_validate(value)
+        except ValidationError as exc:
+            raise RestoreError("invalid stored document") from exc
+        if stored_document.id != key:
+            raise RestoreError("document id does not match map key")
+        if stored_document.status != "committed":
+            raise RestoreError("invalid document status")
+        expected_digest = sha256(stored_document.rendered_text.encode("utf-8")).hexdigest()
+        if stored_document.rendered_text_sha256 != expected_digest:
+            raise RestoreError("document digest does not match stored bytes")
+        expected_request_hash = document_request_hash(
+            stored_document.synthetic_patient_id,
+            stored_document.synthetic_visit_id,
+            stored_document.document_ref,
+            stored_document.content_hash,
+            stored_document.rendered_text_sha256,
+        )
+        if stored_document.request_hash != expected_request_hash:
+            raise RestoreError("document request_hash does not match body")
+        if stored_document.id != document_id(settings.seed, stored_document.idempotency_key):
+            raise RestoreError("document id is not seed-derived")
+        if stored_document.id.startswith("tsk_"):
+            raise RestoreError("document id collides with task namespace")
+        documents[key] = stored_document.model_dump()
+
+    documents_by_key: dict[str, str] = {}
+    for key, value in documents_by_key_raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise RestoreError("invalid document idempotency map entry")
+        target = documents.get(value)
+        if target is None:
+            raise RestoreError("dangling documents_by_key target")
+        if target["idempotency_key"] != key:
+            raise RestoreError("document idempotency map key does not match document")
+        documents_by_key[key] = value
+    rebuilt_document_keys = {
+        document["idempotency_key"]: document["id"] for document in documents.values()
+    }
+    if rebuilt_document_keys != documents_by_key:
+        raise RestoreError("document idempotency map is inconsistent with documents")
+
+    documents_by_logical: dict[str, str] = {}
+    for key, value in documents_by_logical_raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise RestoreError("invalid document logical map entry")
+        target = documents.get(value)
+        if target is None:
+            raise RestoreError("dangling documents_by_logical target")
+        expected_logical = _document_logical_key(
+            target["synthetic_patient_id"],
+            target["synthetic_visit_id"],
+            target["document_ref"],
+            target["content_hash"],
+        )
+        if key != expected_logical:
+            raise RestoreError("document logical map key does not match document")
+        documents_by_logical[key] = value
+    rebuilt_logical = {
+        _document_logical_key(
+            document["synthetic_patient_id"],
+            document["synthetic_visit_id"],
+            document["document_ref"],
+            document["content_hash"],
+        ): document["id"]
+        for document in documents.values()
+    }
+    if rebuilt_logical != documents_by_logical:
+        raise RestoreError("document logical map is inconsistent with documents")
+
     events = _validate_events(events_raw, seq, trace, epoch)
-    _validate_commit_evidence(tasks, events)
+    _validate_commit_evidence(tasks, documents, events)
     _validate_trace_identities(events)
-    return tasks, tasks_by_key, events, seq, trace, epoch
+    return (
+        tasks,
+        tasks_by_key,
+        documents,
+        documents_by_key,
+        documents_by_logical,
+        events,
+        seq,
+        trace,
+        epoch,
+    )
 
 
 def _validate_events(events_raw: list[object], seq: int, trace: int, epoch: int) -> list[dict]:
@@ -575,28 +847,49 @@ def _validate_events(events_raw: list[object], seq: int, trace: int, epoch: int)
     return events
 
 
-def _validate_commit_evidence(tasks: dict[str, dict], events: list[dict]) -> None:
+def _validate_commit_evidence(
+    tasks: dict[str, dict],
+    documents: dict[str, dict],
+    events: list[dict],
+) -> None:
     committed: set[str] = set()
+    committed_documents: set[str] = set()
     for event in events:
-        if event["type"] != "task_committed":
-            continue
         details = event["details"]
-        task_id_value = details.get("task_id")
-        if not isinstance(task_id_value, str) or task_id_value not in tasks:
-            raise RestoreError("committed evidence references a missing task")
-        task = tasks[task_id_value]
-        if details.get("committed") is not True:
-            raise RestoreError("committed evidence is not marked committed")
-        if details.get("idempotency_key") != task["idempotency_key"]:
-            raise RestoreError("committed evidence idempotency key does not match task")
-        if details.get("patient_id") != task["patient_id"]:
-            raise RestoreError("committed evidence patient does not match task")
-        if task_id_value in committed:
-            raise RestoreError("duplicate committed evidence")
-        committed.add(task_id_value)
+        if event["type"] == "task_committed":
+            task_id_value = details.get("task_id")
+            if not isinstance(task_id_value, str) or task_id_value not in tasks:
+                raise RestoreError("committed evidence references a missing task")
+            task = tasks[task_id_value]
+            if details.get("committed") is not True:
+                raise RestoreError("committed evidence is not marked committed")
+            if details.get("idempotency_key") != task["idempotency_key"]:
+                raise RestoreError("committed evidence idempotency key does not match task")
+            if details.get("patient_id") != task["patient_id"]:
+                raise RestoreError("committed evidence patient does not match task")
+            if task_id_value in committed:
+                raise RestoreError("duplicate committed evidence")
+            committed.add(task_id_value)
+        elif event["type"] == "document_committed":
+            document_id_value = details.get("document_id")
+            if not isinstance(document_id_value, str) or document_id_value not in documents:
+                raise RestoreError("committed evidence references a missing document")
+            document = documents[document_id_value]
+            if details.get("committed") is not True:
+                raise RestoreError("committed evidence is not marked committed")
+            if details.get("idempotency_key") != document["idempotency_key"]:
+                raise RestoreError("committed evidence idempotency key does not match document")
+            if details.get("synthetic_patient_id") != document["synthetic_patient_id"]:
+                raise RestoreError("committed evidence patient does not match document")
+            if document_id_value in committed_documents:
+                raise RestoreError("duplicate committed evidence")
+            committed_documents.add(document_id_value)
     missing = set(tasks) - committed
     if missing:
         raise RestoreError("task exists without matching committed evidence")
+    missing_documents = set(documents) - committed_documents
+    if missing_documents:
+        raise RestoreError("document exists without matching committed evidence")
 
 
 def _validate_trace_identities(events: list[dict]) -> None:
@@ -613,11 +906,13 @@ def _validate_trace_identities(events: list[dict]) -> None:
         for event in group:
             details = event["details"]
             event_type = event["type"]
-            if event_type == "task_requested":
+            if event_type in {"task_requested", "document_requested"}:
                 requested += 1
             if event_type in {
                 "task_committed",
                 "task_replayed",
+                "document_committed",
+                "document_replayed",
                 "conflict",
                 "commit_skipped",
                 "fault_configured",
@@ -631,7 +926,18 @@ def _validate_trace_identities(events: list[dict]) -> None:
                 task_id_value = details.get("task_id")
                 if isinstance(task_id_value, str):
                     object_ids.add(task_id_value)
-            if event_type in {"task_requested", "task_committed", "task_replayed"}:
+            if event_type in {"document_committed", "document_replayed"}:
+                document_id_value = details.get("document_id")
+                if isinstance(document_id_value, str):
+                    object_ids.add(document_id_value)
+            if event_type in {
+                "task_requested",
+                "task_committed",
+                "task_replayed",
+                "document_requested",
+                "document_committed",
+                "document_replayed",
+            }:
                 key = details.get("idempotency_key")
                 if isinstance(key, str):
                     operation_keys.add(key)

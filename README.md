@@ -108,6 +108,10 @@ The second vertical slice is a deterministic HTTP PVS-like simulator. It is not 
 - Patient identifiers, search keys, and task titles must match `synth-[a-z0-9-]+`
 - Seeded patients and encounters are derived from the seed; they repeat for a fixed seed
 - The representative remote write is synthetic staff-task creation
+- Synthetic clinical documents persist exact UTF-8 `rendered_text` at
+  `POST /v1/clinical-documents` and return it on `GET /v1/clinical-documents/{id}`
+- Document patient/visit/`document_ref` labels are opaque Praxis `is_ref` tokens,
+  not `synth-*` corpus members
 - Failure injection and event traces are admin/test controls, not a product dashboard
 
 Live contract:
@@ -160,13 +164,23 @@ curl -s -X POST http://127.0.0.1:8081/v1/tasks \
   -d '{"patient_id":"synth-ada","title":"synth-chart-review","priority":"normal"}'
 ```
 
+Create a synthetic clinical document (requires `Idempotency-Key`; labels are
+opaque `is_ref` tokens, not corpus patients):
+
+```bash
+curl -s -X POST http://127.0.0.1:8081/v1/clinical-documents \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: demo-doc-0001' \
+  -d '{"synthetic_patient_id":"visit-ada","synthetic_visit_id":"visit-one","document_ref":"note-alpha","content_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","rendered_text":"hello"}'
+```
+
 Inspect the remote event trace:
 
 ```bash
 curl -s http://127.0.0.1:8081/v1/admin/events
 ```
 
-Reset corpus, tasks, faults, and events:
+Reset corpus, tasks, documents, faults, and events:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8081/v1/admin/reset
@@ -205,7 +219,7 @@ ruff check src tests
 pytest -q
 ```
 
-The test suite covers patient/encounter reads, synthetic-identifier enforcement, idempotent task creation, missing-patient/validation/conflict/infrastructure failures, delayed response, and ambiguous remote-effect recovery from Forge evidence.
+The test suite covers patient/encounter reads, synthetic-identifier enforcement, idempotent task creation, exact-content clinical documents, missing-patient/validation/conflict/infrastructure failures, delayed response, and ambiguous remote-effect recovery from Forge evidence.
 
 ## Durable simulator state
 
@@ -213,7 +227,7 @@ Fake Booking and Fake PVS persist only simulator remote business state. Chaos-pr
 
 Persisted when durable mode is on:
 
-- committed bookings / tasks
+- committed bookings / tasks / clinical documents
 - idempotency-key mappings used to replay the same remote object
 - booking slot consumption needed for conflict semantics
 - event/evidence records used to prove a prior committed remote effect

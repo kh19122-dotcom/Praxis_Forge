@@ -1261,19 +1261,21 @@
       }
     },
     "fake-pvs": {
-      "digest": "e495424cdb27f7ea8eb8464b522f835b6423c0fb380a11fe2f54fea993dc7ce1",
+      "digest": "3092f26684013216e1a291b28404ff367bd4d91f303f80f6c0a516ac52b686cc",
       "snapshot": {
         "idempotent_write": "POST /v1/tasks",
         "json_operations": [
           "GET /healthz",
           "GET /v1/admin/events",
           "GET /v1/admin/faults",
+          "GET /v1/clinical-documents/{document_id}",
           "GET /v1/encounters/{encounter_id}",
           "GET /v1/patients",
           "GET /v1/patients/{patient_id}",
           "GET /v1/patients/{patient_id}/encounters",
           "GET /v1/tasks/{task_id}",
           "POST /v1/admin/reset",
+          "POST /v1/clinical-documents",
           "POST /v1/tasks",
           "PUT /v1/admin/faults"
         ],
@@ -1604,6 +1606,180 @@
               },
               "status_codes": [
                 "200"
+              ]
+            }
+          },
+          "GET /v1/clinical-documents/{document_id}": {
+            "json": {
+              "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "document_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "request_basic": null,
+              "request_required": null,
+              "request_required_fields": [],
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "content_hash",
+                  "document_ref",
+                  "id",
+                  "idempotency_key",
+                  "rendered_text",
+                  "rendered_text_sha256",
+                  "status",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "content_hash": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "document_ref": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "rendered_text": {
+                      "type": "string"
+                    },
+                    "rendered_text_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "committed",
+                      "type": "string"
+                    },
+                    "synthetic_patient_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "synthetic_visit_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content_hash",
+                    "document_ref",
+                    "id",
+                    "idempotency_key",
+                    "rendered_text",
+                    "rendered_text_sha256",
+                    "status",
+                    "synthetic_patient_id",
+                    "synthetic_visit_id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "status_codes": [
+                "200",
+                "422"
+              ]
+            },
+            "method": "GET",
+            "path": "/v1/clinical-documents/{document_id}",
+            "yaml": {
+              "idempotency_key": null,
+              "parameters": [
+                {
+                  "in": "path",
+                  "name": "document_id",
+                  "required": true,
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "request_basic": null,
+              "request_required": null,
+              "request_required_fields": [],
+              "request_schema": null,
+              "response_required_fields": {
+                "200": [
+                  "content_hash",
+                  "document_ref",
+                  "id",
+                  "idempotency_key",
+                  "rendered_text",
+                  "rendered_text_sha256",
+                  "status",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "content_hash": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "document_ref": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "rendered_text": {
+                      "type": "string"
+                    },
+                    "rendered_text_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "committed",
+                      "type": "string"
+                    },
+                    "synthetic_patient_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "synthetic_visit_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content_hash",
+                    "document_ref",
+                    "id",
+                    "idempotency_key",
+                    "rendered_text",
+                    "rendered_text_sha256",
+                    "status",
+                    "synthetic_patient_id",
+                    "synthetic_visit_id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "status_codes": [
+                "200",
+                "404"
               ]
             }
           },
@@ -2444,6 +2620,394 @@
               ]
             }
           },
+          "POST /v1/clinical-documents": {
+            "json": {
+              "idempotency_key": {
+                "required": true,
+                "schema": {
+                  "maxLength": 128,
+                  "minLength": 8,
+                  "type": "string"
+                }
+              },
+              "parameters": [
+                {
+                  "in": "header",
+                  "name": "Idempotency-Key",
+                  "required": true,
+                  "schema": {
+                    "maxLength": 128,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                }
+              ],
+              "request_basic": {
+                "properties": {
+                  "content_hash": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "document_ref": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "rendered_text": {
+                    "type": "string"
+                  },
+                  "synthetic_patient_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "synthetic_visit_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content_hash",
+                  "document_ref",
+                  "rendered_text",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ],
+                "type": "object"
+              },
+              "request_required": true,
+              "request_required_fields": [
+                "content_hash",
+                "document_ref",
+                "rendered_text",
+                "synthetic_patient_id",
+                "synthetic_visit_id"
+              ],
+              "request_schema": {
+                "properties": {
+                  "content_hash": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "document_ref": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "rendered_text": {
+                    "type": "string"
+                  },
+                  "synthetic_patient_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "synthetic_visit_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content_hash",
+                  "document_ref",
+                  "rendered_text",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ],
+                "type": "object"
+              },
+              "response_required_fields": {
+                "201": [
+                  "content_hash",
+                  "document_ref",
+                  "id",
+                  "idempotency_key",
+                  "rendered_text",
+                  "rendered_text_sha256",
+                  "status",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ]
+              },
+              "response_schemas": {
+                "201": {
+                  "properties": {
+                    "content_hash": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "document_ref": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "rendered_text": {
+                      "type": "string"
+                    },
+                    "rendered_text_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "committed",
+                      "type": "string"
+                    },
+                    "synthetic_patient_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "synthetic_visit_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content_hash",
+                    "document_ref",
+                    "id",
+                    "idempotency_key",
+                    "rendered_text",
+                    "rendered_text_sha256",
+                    "status",
+                    "synthetic_patient_id",
+                    "synthetic_visit_id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "status_codes": [
+                "201",
+                "422"
+              ]
+            },
+            "method": "POST",
+            "path": "/v1/clinical-documents",
+            "yaml": {
+              "idempotency_key": {
+                "required": true,
+                "schema": {
+                  "maxLength": 128,
+                  "minLength": 8,
+                  "type": "string"
+                }
+              },
+              "parameters": [
+                {
+                  "in": "header",
+                  "name": "Idempotency-Key",
+                  "required": true,
+                  "schema": {
+                    "maxLength": 128,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                }
+              ],
+              "request_basic": {
+                "properties": {
+                  "content_hash": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "document_ref": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "rendered_text": {
+                    "type": "string"
+                  },
+                  "synthetic_patient_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "synthetic_visit_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content_hash",
+                  "document_ref",
+                  "rendered_text",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ],
+                "type": "object"
+              },
+              "request_required": true,
+              "request_required_fields": [
+                "content_hash",
+                "document_ref",
+                "rendered_text",
+                "synthetic_patient_id",
+                "synthetic_visit_id"
+              ],
+              "request_schema": {
+                "properties": {
+                  "content_hash": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "document_ref": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "rendered_text": {
+                    "type": "string"
+                  },
+                  "synthetic_patient_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "synthetic_visit_id": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content_hash",
+                  "document_ref",
+                  "rendered_text",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ],
+                "type": "object"
+              },
+              "response_required_fields": {
+                "200": [
+                  "content_hash",
+                  "document_ref",
+                  "id",
+                  "idempotency_key",
+                  "rendered_text",
+                  "rendered_text_sha256",
+                  "status",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ],
+                "201": [
+                  "content_hash",
+                  "document_ref",
+                  "id",
+                  "idempotency_key",
+                  "rendered_text",
+                  "rendered_text_sha256",
+                  "status",
+                  "synthetic_patient_id",
+                  "synthetic_visit_id"
+                ]
+              },
+              "response_schemas": {
+                "200": {
+                  "properties": {
+                    "content_hash": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "document_ref": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "rendered_text": {
+                      "type": "string"
+                    },
+                    "rendered_text_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "committed",
+                      "type": "string"
+                    },
+                    "synthetic_patient_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "synthetic_visit_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content_hash",
+                    "document_ref",
+                    "id",
+                    "idempotency_key",
+                    "rendered_text",
+                    "rendered_text_sha256",
+                    "status",
+                    "synthetic_patient_id",
+                    "synthetic_visit_id"
+                  ],
+                  "type": "object"
+                },
+                "201": {
+                  "properties": {
+                    "content_hash": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "document_ref": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "idempotency_key": {
+                      "type": "string"
+                    },
+                    "rendered_text": {
+                      "type": "string"
+                    },
+                    "rendered_text_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "committed",
+                      "type": "string"
+                    },
+                    "synthetic_patient_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    },
+                    "synthetic_visit_id": {
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content_hash",
+                    "document_ref",
+                    "id",
+                    "idempotency_key",
+                    "rendered_text",
+                    "rendered_text_sha256",
+                    "status",
+                    "synthetic_patient_id",
+                    "synthetic_visit_id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "status_codes": [
+                "200",
+                "201",
+                "409",
+                "422",
+                "503",
+                "504"
+              ]
+            }
+          },
           "POST /v1/tasks": {
             "json": {
               "idempotency_key": {
@@ -2973,6 +3537,8 @@
           "GET /v1/patients/{patient_id}/encounters",
           "POST /v1/tasks",
           "GET /v1/tasks/{task_id}",
+          "POST /v1/clinical-documents",
+          "GET /v1/clinical-documents/{document_id}",
           "GET /v1/admin/events",
           "PUT /v1/admin/faults",
           "POST /v1/admin/reset"
@@ -2982,12 +3548,14 @@
           "GET /healthz",
           "GET /v1/admin/events",
           "GET /v1/admin/faults",
+          "GET /v1/clinical-documents/{document_id}",
           "GET /v1/encounters/{encounter_id}",
           "GET /v1/patients",
           "GET /v1/patients/{patient_id}",
           "GET /v1/patients/{patient_id}/encounters",
           "GET /v1/tasks/{task_id}",
           "POST /v1/admin/reset",
+          "POST /v1/clinical-documents",
           "POST /v1/tasks",
           "PUT /v1/admin/faults"
         ]
